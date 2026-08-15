@@ -1,7 +1,6 @@
 # Implementation Plan: Team-distributed AD-Wiki Plugin MVP
 
 Product Contract: in-run alignment from the explicit continuation request “开始实施” and `$ad-harness:ad-lfg`
-Technical Design: https://yuque.antfin.com/wt150181/kniq4m/pr7hg252nulutem1
 Requirements: R1-R10
 Commit policy / authority: none; the user authorized scoped working-tree edits, not commit, push, PR, marketplace installation, or other external mutation
 

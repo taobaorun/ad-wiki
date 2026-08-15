@@ -11,7 +11,7 @@ from typing import Any, Iterable
 from urllib.parse import unquote
 
 
-PLUGIN_VERSION = "0.1.0"
+PLUGIN_VERSION = "0.2.0"
 PROFILE_VERSION = "0.1"
 OKF_VERSION = "0.2"
 
@@ -157,7 +157,7 @@ def _default_config(domain: str) -> dict[str, Any]:
         },
         "profile_version": PROFILE_VERSION,
         "raw_root": "raw",
-        "review": {"high_risk": "pre_apply", "medium_risk": "post_apply"},
+        "review": {"high_risk": "pre_apply", "medium_risk": "post_apply", "owners": []},
         "search": {"mcp_threshold_pages": 1000, "provider": "builtin"},
     }
 
@@ -190,11 +190,16 @@ def initialize_repository(repo: str | os.PathLike[str], domain: str = "general")
     )
     files = {
         "ad-wiki.yaml": config_text,
+        ".ad-wiki/.gitignore": "lock\n",
         ".ad-wiki/domain.md": domain_text,
         ".ad-wiki/source-registry.json": registry_text,
         "wiki/index.md": _root_index(),
         "wiki/log.md": "# Knowledge Bundle Update Log\n",
     }
+    for relative in [*files, "raw", "wiki", ".ad-wiki"]:
+        candidate = root / relative
+        if candidate.is_symlink() or not _path_is_within(candidate.resolve(), root):
+            raise ADWikiError(f"initialization path escapes repository or uses a symlink: {relative}")
     for relative, content in files.items():
         path = root / relative
         if path.exists() and (not path.is_file() or path.read_text(encoding="utf-8") != content):
@@ -207,6 +212,10 @@ def initialize_repository(repo: str | os.PathLike[str], domain: str = "general")
         ".ad-wiki/runs",
         *(f"wiki/{name}" for name in CONCEPT_DIRECTORIES),
     ]
+    for relative in directories:
+        candidate = root / relative
+        if candidate.is_symlink() or not _path_is_within(candidate.resolve(), root):
+            raise ADWikiError(f"initialization path escapes repository or uses a symlink: {relative}")
     for relative in directories:
         (root / relative).mkdir(parents=True, exist_ok=True)
 
@@ -222,6 +231,8 @@ def initialize_repository(repo: str | os.PathLike[str], domain: str = "general")
 
 def _load_config(root: Path) -> dict[str, Any]:
     path = root / "ad-wiki.yaml"
+    if path.is_symlink() or not _path_is_within(path.resolve(), root):
+        raise ADWikiError("ad-wiki.yaml must not escape the repository or use a symlink")
     if not path.is_file():
         raise ADWikiError("ad-wiki.yaml not found; initialize the repository first")
     try:
@@ -249,6 +260,8 @@ def _require_supported_profile(config: dict[str, Any]) -> None:
 
 def _load_registry(root: Path) -> dict[str, Any]:
     path = root / ".ad-wiki/source-registry.json"
+    if path.is_symlink() or not _path_is_within(path.resolve(), root):
+        raise ADWikiError("source registry must not escape the repository or use a symlink")
     if not path.is_file():
         raise ADWikiError("source registry not found; initialize the repository first")
     try:
@@ -646,6 +659,48 @@ def _issue(code: str, message: str, path: str, **extra: Any) -> dict[str, Any]:
     return {"code": code, "message": message, "path": path, **extra}
 
 
+def _lint_severities(config: dict[str, Any], errors: list[dict[str, Any]]) -> dict[str, str]:
+    defaults = {
+        "broken_links": "warning",
+        "missing_claim_source": "error",
+        "orphan_pages": "warning",
+        "stale_content": "warning",
+    }
+    lint = config.get("lint", {})
+    if not isinstance(lint, dict):
+        errors.append(_issue("ADW-E107", "lint configuration must be a mapping", "ad-wiki.yaml"))
+        return defaults
+    result: dict[str, str] = {}
+    for key, default in defaults.items():
+        value = lint.get(key, default)
+        if value not in {"error", "warning", "ignore"}:
+            errors.append(
+                _issue(
+                    "ADW-E107",
+                    f"lint.{key} must be error, warning, or ignore",
+                    "ad-wiki.yaml",
+                )
+            )
+            value = default
+        result[key] = value
+    return result
+
+
+def _append_policy_finding(
+    errors: list[dict[str, Any]],
+    warnings: list[dict[str, Any]],
+    severity: str,
+    warning_code: str,
+    message: str,
+    path: str,
+) -> None:
+    if severity == "ignore":
+        return
+    code = warning_code if severity == "warning" else warning_code.replace("ADW-W", "ADW-E", 1)
+    target = warnings if severity == "warning" else errors
+    target.append(_issue(code, message, path))
+
+
 def _local_link_target(link: str) -> str | None:
     candidate = link.strip().split()[0].strip("<>")
     if not candidate or candidate.startswith(("http://", "https://", "mailto:", "urn:", "#")):
@@ -660,6 +715,64 @@ def validate_repository(repo: str | os.PathLike[str], today: date | None = None)
     errors: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
     info: list[dict[str, Any]] = []
+    lint_severities = _lint_severities(config, errors)
+    domain = config.get("domain", {})
+    configured_types: set[str] | None = None
+    if not isinstance(domain, dict):
+        errors.append(_issue("ADW-E108", "domain configuration must be a mapping", "ad-wiki.yaml"))
+    else:
+        raw_types = domain.get("concept_types")
+        if not isinstance(raw_types, list) or not raw_types or not all(
+            isinstance(item, str) and item.strip() for item in raw_types
+        ):
+            errors.append(
+                _issue(
+                    "ADW-E108",
+                    "domain.concept_types must be a non-empty list of strings",
+                    "ad-wiki.yaml",
+                )
+            )
+        else:
+            configured_types = {item.strip() for item in raw_types}
+        if not isinstance(domain.get("name"), str) or not domain.get("name", "").strip():
+            errors.append(_issue("ADW-E108", "domain.name must be a non-empty string", "ad-wiki.yaml"))
+
+    ingest_config = config.get("ingest", {})
+    if not isinstance(ingest_config, dict):
+        errors.append(_issue("ADW-E109", "ingest configuration must be a mapping", "ad-wiki.yaml"))
+    else:
+        if ingest_config.get("mode", "supervised") != "supervised":
+            errors.append(_issue("ADW-E109", "MVP ingest.mode must be supervised", "ad-wiki.yaml"))
+        max_batch_size = ingest_config.get("max_batch_size", 1)
+        if type(max_batch_size) is not int or max_batch_size < 1:
+            errors.append(_issue("ADW-E109", "ingest.max_batch_size must be a positive integer", "ad-wiki.yaml"))
+        if ingest_config.get("default_status", "draft") not in ALLOWED_STATUS:
+            errors.append(_issue("ADW-E109", "ingest.default_status must be a supported status", "ad-wiki.yaml"))
+
+    review_config = config.get("review", {})
+    actor_pattern = re.compile(r"(?:human|process):[^\s:]+|[^\s/:]+/[^\s/]+")
+    if not isinstance(review_config, dict):
+        errors.append(_issue("ADW-E109", "review configuration must be a mapping", "ad-wiki.yaml"))
+    else:
+        if review_config.get("medium_risk", "post_apply") != "post_apply":
+            errors.append(_issue("ADW-E109", "review.medium_risk must be post_apply", "ad-wiki.yaml"))
+        if review_config.get("high_risk", "pre_apply") != "pre_apply":
+            errors.append(_issue("ADW-E109", "review.high_risk must be pre_apply", "ad-wiki.yaml"))
+        owners = review_config.get("owners", [])
+        if not isinstance(owners, list) or not all(
+            isinstance(item, str) and actor_pattern.fullmatch(item) for item in owners
+        ):
+            errors.append(_issue("ADW-E109", "review.owners must be a list of valid actors", "ad-wiki.yaml"))
+
+    search_config = config.get("search", {})
+    if not isinstance(search_config, dict):
+        errors.append(_issue("ADW-E109", "search configuration must be a mapping", "ad-wiki.yaml"))
+    else:
+        if search_config.get("provider", "builtin") != "builtin":
+            errors.append(_issue("ADW-E109", "MVP search.provider must be builtin", "ad-wiki.yaml"))
+        threshold = search_config.get("mcp_threshold_pages", 1000)
+        if type(threshold) is not int or threshold < 1:
+            errors.append(_issue("ADW-E109", "search.mcp_threshold_pages must be positive", "ad-wiki.yaml"))
     if not raw_root.is_dir():
         errors.append(_issue("ADW-E100", "raw_root must be an existing directory", _relative_posix(raw_root, root)))
     if not bundle.is_dir():
@@ -707,6 +820,14 @@ def validate_repository(repo: str | os.PathLike[str], today: date | None = None)
             errors.append(_issue("OKF-E004", f"unsupported or malformed top-level YAML: {line}", relative))
         if not fields.get("type"):
             errors.append(_issue("OKF-E002", "Concept frontmatter requires a non-empty type", relative))
+        elif configured_types is not None and fields["type"] not in configured_types:
+            warnings.append(
+                _issue(
+                    "ADW-W250",
+                    f"Concept type is not declared by this repository: {fields['type']}",
+                    relative,
+                )
+            )
 
         status = fields.get("status")
         if status and status not in ALLOWED_STATUS:
@@ -726,7 +847,14 @@ def validate_repository(repo: str | os.PathLike[str], today: date | None = None)
                 errors.append(_issue("ADW-E104", "stale_after must be YYYY-MM-DD", relative))
             else:
                 if current_date >= stale_date:
-                    warnings.append(_issue("ADW-W201", "Concept is stale on or after stale_after", relative))
+                    _append_policy_finding(
+                        errors,
+                        warnings,
+                        lint_severities["stale_content"],
+                        "ADW-W201",
+                        "Concept is stale on or after stale_after",
+                        relative,
+                    )
 
         inline_sources = fields.get("sources")
         if inline_sources:
@@ -744,7 +872,14 @@ def validate_repository(repo: str | os.PathLike[str], today: date | None = None)
                 errors.append(_issue("ADW-E110", "each sources entry requires resource", relative))
         footnotes = set(FOOTNOTE.findall(body))
         for label in sorted(footnotes - source_ids):
-            warnings.append(_issue("ADW-W220", f"claim footnote has no matching sources id: {label}", relative))
+            _append_policy_finding(
+                errors,
+                warnings,
+                lint_severities["missing_claim_source"],
+                "ADW-W220",
+                f"claim footnote has no matching sources id: {label}",
+                relative,
+            )
 
         if "verified" in fields:
             verified_entries = _verified_entries(lines, fields.get("verified"))
@@ -781,7 +916,14 @@ def validate_repository(repo: str | os.PathLike[str], today: date | None = None)
                 continue
             candidate = target / "index.md" if target.is_dir() else target
             if not candidate.exists():
-                warnings.append(_issue("ADW-W210", f"broken local link: {raw_link}", relative))
+                _append_policy_finding(
+                    errors,
+                    warnings,
+                    lint_severities["broken_links"],
+                    "ADW-W210",
+                    f"broken local link: {raw_link}",
+                    relative,
+                )
             elif candidate.resolve() in inbound:
                 inbound[candidate.resolve()] += 1
 
@@ -834,7 +976,14 @@ def validate_repository(repo: str | os.PathLike[str], today: date | None = None)
 
     for concept, count in sorted(inbound.items(), key=lambda item: str(item[0])):
         if count == 0:
-            warnings.append(_issue("ADW-W240", "Concept has no inbound Concept links", _relative_posix(concept, root)))
+            _append_policy_finding(
+                errors,
+                warnings,
+                lint_severities["orphan_pages"],
+                "ADW-W240",
+                "Concept has no inbound Concept links",
+                _relative_posix(concept, root),
+            )
 
     raw_report = guard_raw(root)
     errors.extend(raw_report["violations"])
@@ -874,16 +1023,32 @@ def write_run_report(
         raise ADWikiError(f"unsupported state: {state}")
     if risk not in ALLOWED_RISKS:
         raise ADWikiError(f"unsupported risk: {risk}")
+    if risk == "prohibited":
+        raise ADWikiError("prohibited operations cannot be recorded as runnable")
 
-    path = root / ".ad-wiki/runs" / run_id / "run.json"
+    runs_root = root / ".ad-wiki/runs"
+    if runs_root.is_symlink() or not _path_is_within(runs_root.resolve(), root):
+        raise ADWikiError(".ad-wiki/runs must not escape the repository or use a symlink")
+    run_directory = runs_root / run_id
+    if run_directory.is_symlink() or not _path_is_within(run_directory.resolve(), root):
+        raise ADWikiError("run directory must not escape the repository or use a symlink")
+    path = run_directory / "run.json"
     previous: dict[str, Any] | None = None
     if path.is_file():
         previous = json.loads(path.read_text(encoding="utf-8"))
         if previous.get("operation") != operation:
             raise ADWikiError("run operation cannot change")
+        if previous.get("risk") != risk:
+            raise ADWikiError("run risk cannot change")
         previous_state = previous.get("status")
         if state != previous_state and state not in STATE_TRANSITIONS.get(previous_state, set()):
             raise ADWikiError(f"invalid state transition: {previous_state} -> {state}")
+    elif state not in {"DISCOVERED", "PREFLIGHTED", "PLANNED"}:
+        raise ADWikiError(f"new run cannot start at state: {state}")
+
+    if state in {"VALIDATED", "REVIEWED", "COMMITTED"}:
+        if not validations or any(item.get("status") != "passed" for item in validations):
+            raise ADWikiError(f"{state} requires non-empty passed validation evidence")
 
     now = _utc_now()
     report = {

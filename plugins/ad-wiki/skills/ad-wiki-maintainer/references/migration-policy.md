@@ -4,7 +4,7 @@ Treat Plugin version, AD-Wiki Profile version, and OKF version as separate ident
 
 Before migrating:
 
-1. Read `profile_version` from `ad-wiki.yaml` and `okf_version` from root `wiki/index.md`.
+1. Run `migrate_bundle.py`, then read `profile_version` from `ad-wiki.yaml` and `okf_version` from root `wiki/index.md`.
 2. Identify every affected file and the compatibility behavior for old readers.
 3. Record the migration write set, validation, rollback point, and reviewer.
 4. Require explicit approval because profile and directory migrations are high risk.
@@ -27,3 +27,5 @@ After migration:
 5. Stop before commit, push, or publication unless separately authorized.
 
 Plugin upgrades never trigger migration automatically. Each knowledge repository owner chooses when to migrate.
+
+The `0.2.0` Plugin intentionally keeps AD-Wiki Profile `0.1`. Its migration command returns `status: current` for Profile `0.1` and refuses every unregistered path. A future release must add and test an exact source-to-target transform before advertising that migration.

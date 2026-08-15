@@ -9,6 +9,14 @@ from .core import (
     validate_repository,
     write_run_report,
 )
+from .runtime import (
+    apply_run,
+    approve_run,
+    migrate_repository,
+    prepare_run,
+    review_run,
+    search_repository,
+)
 
 __all__ = [
     "ADWikiError",
@@ -18,4 +26,10 @@ __all__ = [
     "register_source",
     "validate_repository",
     "write_run_report",
+    "prepare_run",
+    "approve_run",
+    "apply_run",
+    "review_run",
+    "search_repository",
+    "migrate_repository",
 ]

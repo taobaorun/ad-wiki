@@ -221,7 +221,7 @@ sources:
     author: human:karpathy
     last_modified: 2026-04-04
 generated:
-  by: ad-wiki/0.1.0
+  by: ad-wiki/0.2.0
   at: 2026-08-15T19:00:00+08:00
 status: draft
 stale_after: 2027-02-15
@@ -315,7 +315,10 @@ ad-wiki-distribution/
         │   ├── validate_bundle.py
         │   ├── build_index.py
         │   ├── raw_diff_guard.py
-        │   └── write_run_report.py
+        │   ├── write_run_report.py
+        │   ├── prepare_run.py / approve_run.py
+        │   ├── apply_run.py / review_run.py
+        │   └── search_wiki.py / migrate_bundle.py
         └── .mcp.json                # Phase 2 再加入，不作为 MVP 前置
 ```
 
@@ -333,7 +336,7 @@ ad-wiki-distribution/
 ```json
 {
   "name": "ad-wiki",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Maintain independent team knowledge bases as continuously compiled OKF bundles.",
   "author": {
     "name": "AD Wiki Team"
@@ -567,10 +570,11 @@ DISCOVERED
 {
   "run_id": "run-20260815-001",
   "operation": "ingest",
-  "plugin_version": "0.1.0",
+  "plugin_version": "0.2.0",
   "profile_version": "0.1",
   "inputs": ["raw/sources/karpathy-llm-wiki.md"],
   "source_hashes": {"raw/sources/karpathy-llm-wiki.md": "sha256:..."},
+  "baseline": {"wiki/index.md": "sha256:...", "wiki/concepts/rag.md": "sha256:..."},
   "read_set": ["wiki/index.md", "wiki/concepts/rag.md"],
   "write_set": ["wiki/sources/karpathy-llm-wiki.md", "wiki/concepts/rag.md"],
   "risk": "medium",
@@ -582,10 +586,11 @@ DISCOVERED
 该运行记录是 AD-Wiki 的操作审计，不是 OKF Concept。Attested Computation 的运行 Receipt 也不写入 Bundle；需要留存时进入外部审计系统或 `.ad-wiki/runs/`，并遵守敏感数据策略。
 
 ### 原子性约束
-+ 写入前记录 `read_set`、`write_set` 和当前 Git 基线；
++ 写入前记录 `read_set`、`write_set` 和对应文件哈希基线；有 Git 时可同时记录 HEAD 作为恢复边界；
++ Agent 只写 `.ad-wiki/runs/<run-id>/staged/`，不能直接改 live `wiki/`；
 + 同一知识库只允许一个 Writer，使用 `.ad-wiki/lock` 防止并发写；
-+ 修改后一次性运行全部校验；
-+ 校验失败时保留报告，不更新为成功状态；
++ `apply_run.py` 在应用前复核基线，在应用后统一生成 Index、Log 并运行全部校验；
++ 校验失败时恢复操作前文件、保留失败报告，不更新为成功状态；
 + 不自动覆盖用户在计划后新增的改动；检测到基线漂移时重新规划。
 
 ## 十二、风险分级与人工门禁
@@ -607,7 +612,7 @@ DISCOVERED
 ## 十三、确定性脚本边界
 LLM 负责需要理解与综合的工作；脚本负责可机械验证的工作。
 
-### MVP 脚本
+### 可用版确定性脚本
 | 脚本 | 责任 |
 | --- | --- |
 | `init_bundle.py` | 根据配置创建最小目录和保留文件 |
@@ -616,6 +621,12 @@ LLM 负责需要理解与综合的工作；脚本负责可机械验证的工作�
 | `build_index.py` | 从 Frontmatter 生成根和子目录索引 |
 | `raw_diff_guard.py` | 检测 Maintainer 是否修改已登记 Raw |
 | `write_run_report.py` | 标准化运行计划、结果和校验报告 |
+| `prepare_run.py` | 固化输入、读写集合、来源哈希与文件基线 |
+| `approve_run.py` | 按风险和当前库 Owner 策略执行应用前门禁 |
+| `apply_run.py` | 加锁、检查漂移、应用 Staging、更新索引日志、校验并失败回滚 |
+| `review_run.py` | 记录真实的应用后语义 Review |
+| `search_wiki.py` | 在当前 Bundle 中只读检索 Concept 与来源元数据 |
+| `migrate_bundle.py` | 检查 Profile 是否已是当前版本，只执行已打包的确定性迁移 |
 
 
 ### 校验结果分类
@@ -720,7 +731,7 @@ Raw Source 是不可信数据。来源中出现“忽略规则”“执行命令
 
 ## 十八、团队发布与版本治理
 ### 1. 版本分层
-+ Plugin 使用 SemVer，例如 `0.1.0`；
++ Plugin 使用 SemVer，例如当前可用版 `0.2.0`；
 + AD-Wiki Profile 单独版本化，例如 `profile_version: "0.1"`；
 + OKF 版本写在 Bundle 根 `index.md`，当前为 `0.2`；
 + 三者不能混成一个版本号。
@@ -761,7 +772,7 @@ Raw Source 是不可信数据。来源中出现“忽略规则”“执行命令
 + 团队 Marketplace；
 + `ad-wiki-maintainer` Skill；
 + Init、Ingest、Query、Writeback、Lint；
-+ 6 个确定性脚本；
++ 基础校验脚本与受门禁的事务、搜索、迁移命令；
 + Source、Concept、Synthesis、Question 模板；
 + 一个小型样例 Bundle。
 
@@ -841,4 +852,3 @@ Raw Source 是不可信数据。来源中出现“忽略规则”“执行命令
 + [Open Knowledge Format v0.2 Specification](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md)
 + [已有解读：LLM-Wiki](https://yuque.antfin.com/wt150181/kniq4m/ccu4xzigzpa77aol)
 + [已有解读：OKF](https://yuque.antfin.com/wt150181/kniq4m/xmqx4eedlif0qdzp)
-

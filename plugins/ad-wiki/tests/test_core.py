@@ -74,6 +74,17 @@ class InitializeRepositoryTests(RepositoryTestCase):
         self.assertFalse((self.repo / "raw").exists())
         self.assertFalse((self.repo / "wiki").exists())
 
+    def test_refuses_initialization_through_escaping_directory_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as outside_directory:
+            outside = Path(outside_directory).resolve()
+            try:
+                (self.repo / ".ad-wiki").symlink_to(outside, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                self.skipTest("symlinks unavailable")
+            with self.assertRaisesRegex(ADWikiError, "initialization path escapes"):
+                self.init_repo()
+            self.assertEqual(list(outside.iterdir()), [])
+
 
 class SourceRegistryTests(RepositoryTestCase):
     def setUp(self) -> None:
@@ -279,8 +290,9 @@ Unsupported citation.[^missing]
 """,
         )
         report = validate_repository(self.repo, today=date(2026, 8, 15))
+        error_codes = {item["code"] for item in report["errors"]}
         warning_codes = {item["code"] for item in report["warnings"]}
-        self.assertIn("ADW-W220", warning_codes)
+        self.assertIn("ADW-E220", error_codes)
         self.assertIn("ADW-W230", warning_codes)
 
     def test_rejects_unsupported_inline_source_syntax_explicitly(self) -> None:
@@ -367,6 +379,20 @@ verified:
         verification_errors = [item for item in report["errors"] if item["code"] == "ADW-E112"]
         self.assertEqual(len(verification_errors), 1, report)
         self.assertEqual(verification_errors[0]["path"], "wiki/concepts/bad-verification.md")
+
+    def test_rejects_invalid_executable_repository_policy(self) -> None:
+        config_path = self.repo / "ad-wiki.yaml"
+        config = json.loads(config_path.read_text())
+        config["lint"]["broken_links"] = "sometimes"
+        config["ingest"]["max_batch_size"] = 0
+        config["review"]["owners"] = ["not an actor"]
+        config["search"]["provider"] = "uninstalled-mcp"
+        config_path.write_text(json.dumps(config))
+
+        report = validate_repository(self.repo, today=date(2026, 8, 15))
+        codes = [item["code"] for item in report["errors"]]
+        self.assertIn("ADW-E107", codes)
+        self.assertGreaterEqual(codes.count("ADW-E109"), 3)
 
 
 class RunReportTests(RepositoryTestCase):

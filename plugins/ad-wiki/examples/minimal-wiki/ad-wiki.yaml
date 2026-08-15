@@ -27,7 +27,8 @@
   "raw_root": "raw",
   "review": {
     "high_risk": "pre_apply",
-    "medium_risk": "post_apply"
+    "medium_risk": "post_apply",
+    "owners": []
   },
   "search": {
     "mcp_threshold_pages": 1000,

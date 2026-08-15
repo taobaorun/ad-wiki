@@ -99,6 +99,98 @@ Durable claim.[^paper]
         failed_guard = self.run_cli("raw_diff_guard.py", "--repo", str(self.repo), expected=1)
         self.assertFalse(failed_guard["ok"])
 
+    def test_transactional_ingest_query_and_review_lifecycle(self) -> None:
+        self.run_cli("init_bundle.py", "--repo", str(self.repo), "--domain", "research")
+        source = self.repo / "raw/inbox/paper.md"
+        source.write_text("Persistent knowledge compilation.\n")
+        self.run_cli(
+            "register_source.py",
+            "--repo",
+            str(self.repo),
+            "--source",
+            str(source),
+            "--canonical-locator",
+            "urn:test:paper",
+        )
+        prepared = self.run_cli(
+            "prepare_run.py",
+            "--repo",
+            str(self.repo),
+            "--run-id",
+            "run-cli-ingest",
+            "--operation",
+            "ingest",
+            "--risk",
+            "medium",
+            "--input",
+            "raw/inbox/paper.md",
+            "--read",
+            "wiki/index.md",
+            "--write",
+            "wiki/concepts/paper.md",
+        )
+        self.assertEqual(prepared["status"], "PLANNED")
+        staged = self.repo / ".ad-wiki/runs/run-cli-ingest/staged/wiki/concepts/paper.md"
+        staged.parent.mkdir(parents=True, exist_ok=True)
+        staged.write_text(
+            """---
+type: Concept
+title: Persistent Knowledge Compilation
+description: Compile sources into maintained knowledge.
+status: draft
+sources:
+  - id: paper
+    resource: urn:test:paper
+---
+
+# Persistent Knowledge Compilation
+
+Knowledge is compiled once and maintained.[^paper]
+
+[^paper]: Test paper.
+"""
+        )
+        approved = self.run_cli(
+            "approve_run.py",
+            "--repo",
+            str(self.repo),
+            "--run-id",
+            "run-cli-ingest",
+            "--by",
+            "human:alice",
+        )
+        self.assertEqual(approved["status"], "APPROVED")
+        applied = self.run_cli(
+            "apply_run.py",
+            "--repo",
+            str(self.repo),
+            "--run-id",
+            "run-cli-ingest",
+        )
+        self.assertEqual(applied["status"], "VALIDATED")
+        searched = self.run_cli(
+            "search_wiki.py",
+            "--repo",
+            str(self.repo),
+            "--query",
+            "persistent compilation",
+        )
+        self.assertEqual(searched["results"][0]["concept_id"], "concepts/paper")
+        reviewed = self.run_cli(
+            "review_run.py",
+            "--repo",
+            str(self.repo),
+            "--run-id",
+            "run-cli-ingest",
+            "--by",
+            "human:alice",
+            "--decision",
+            "approved",
+        )
+        self.assertEqual(reviewed["status"], "REVIEWED")
+        migrated = self.run_cli("migrate_bundle.py", "--repo", str(self.repo))
+        self.assertEqual(migrated["status"], "current")
+
     def test_cli_errors_are_structured(self) -> None:
         result = self.run_cli("validate_bundle.py", "--repo", str(self.repo), expected=2)
         self.assertEqual(result["status"], "error")

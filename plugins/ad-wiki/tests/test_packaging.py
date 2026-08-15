@@ -20,7 +20,7 @@ class PackagingTests(unittest.TestCase):
         marketplace = json.loads((PLUGIN_ROOT.parents[1] / ".agents/plugins/marketplace.json").read_text())
 
         self.assertEqual(plugin["name"], "ad-wiki")
-        self.assertEqual(plugin["version"], "0.1.0")
+        self.assertEqual(plugin["version"], "0.2.0")
         self.assertEqual(plugin["skills"], "./skills/")
         self.assertNotIn("mcpServers", plugin)
         self.assertNotIn("apps", plugin)
@@ -40,6 +40,15 @@ class PackagingTests(unittest.TestCase):
         openai = (SKILL_ROOT / "agents/openai.yaml").read_text()
         self.assertIn("$ad-wiki-maintainer", openai)
         self.assertIn("allow_implicit_invocation: true", openai)
+        for command in (
+            "prepare_run.py",
+            "approve_run.py",
+            "apply_run.py",
+            "review_run.py",
+            "search_wiki.py",
+            "migrate_bundle.py",
+        ):
+            self.assertIn(command, skill)
 
     def test_required_templates_exist_and_are_okf_shaped(self) -> None:
         templates = SKILL_ROOT / "assets/templates"
@@ -54,6 +63,18 @@ class PackagingTests(unittest.TestCase):
             self.assertIn(f"type: {expected_type}", text, name)
             self.assertIn("status: draft", text, name)
             self.assertNotIn("verified:", text, name)
+
+    def test_team_usable_runtime_entrypoints_are_packaged(self) -> None:
+        scripts = PLUGIN_ROOT / "scripts"
+        for name in (
+            "prepare_run.py",
+            "approve_run.py",
+            "apply_run.py",
+            "review_run.py",
+            "search_wiki.py",
+            "migrate_bundle.py",
+        ):
+            self.assertTrue((scripts / name).is_file(), name)
 
     def test_minimal_example_bundle_validates(self) -> None:
         example = PLUGIN_ROOT / "examples/minimal-wiki"

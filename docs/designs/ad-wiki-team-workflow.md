@@ -154,7 +154,7 @@ Effective Schema
 这既保留了 Karpathy 所强调的“Schema 随领域共同演化”，又避免每个团队复制一整套长提示词并逐渐漂移。
 
 <!-- 这是一张图片，ocr 内容为： -->
-![AD-Wiki 团队级架构：共享 Plugin 控制面与多个独立知识库](https://intranetproxy.alipay.com/skylark/lark/0/2026/png/78825/1786792898776-d3fa3ab6-f2c5-44dd-a263-bad815095be8.png)
+![AD-Wiki 团队级架构：共享 Plugin 控制面与多个独立知识库](assets/ad-wiki-team-architecture.png)
 
 _图 1：团队统一分发维护能力，各知识库独立保存 Raw Sources、OKF Bundle、配置、权限与 Git 历史。_
 
@@ -422,7 +422,7 @@ description: Maintain team knowledge repositories as persistent OKF v0.2 bundles
 AD-Wiki 将 Karpathy 的三个操作扩展为适合团队治理的六个入口。
 
 <!-- 这是一张图片，ocr 内容为： -->
-![AD-Wiki 核心维护流程与统一写入状态机](https://intranetproxy.alipay.com/skylark/lark/0/2026/png/78825/1786792901450-5368d73f-0db2-4cc9-99b4-98a528afddd4.png)
+![AD-Wiki 核心维护流程与统一写入状态机](assets/ad-wiki-workflow.png)
 
 _图 2：摄入、查询回写、巡检迁移共享同一套计划、审批、应用、校验与审查门禁。_
 

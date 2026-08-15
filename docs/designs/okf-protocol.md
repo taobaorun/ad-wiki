@@ -20,7 +20,7 @@ OKF 更准确的定位不是网络通信协议，而是一个 **Git-native 的�
 >
 
 <!-- 这是一张图片，ocr 内容为： -->
-![OKF 从知识生产者到消费者的整体架构](https://intranetproxy.alipay.com/skylark/lark/0/2026/png/78825/1786788295007-038e9b64-afde-4736-b6de-3b4f6ba42ffa.png)
+![OKF 从知识生产者到消费者的整体架构](assets/okf-architecture.png)
 
 _图 1：人、Agent 和导出管道共同生产 OKF Bundle，搜索、RAG、文档 UI 和图谱工具从同一份内容中消费知识。_
 
@@ -223,7 +223,7 @@ stale_after: 2026-12-31
 >
 
 <!-- 这是一张图片，ocr 内容为： -->
-![OKF Attested Computation 与信任信号](https://intranetproxy.alipay.com/skylark/lark/0/2026/png/78825/1786788297720-e95fdce1-7189-4d6b-af9a-590ad3e4ed8e.png)
+![OKF Attested Computation 与信任信号](assets/okf-attested-computation.png)
 
 _图 2：定义级信任信息与单次运行的 Attestation 链路。_
 

@@ -45,7 +45,7 @@ LLM Wiki 的过程则是：
 >
 
 <!-- 这是一张图片，ocr 内容为： -->
-![LLM Wiki 总体架构：Raw Sources、Schema、LLM Maintainer 与 Persistent Wiki](https://intranetproxy.alipay.com/skylark/lark/0/2026/png/78825/1786789244553-8e2a422b-b879-4143-a554-7ff71a87a4ee.png)
+![LLM Wiki 总体架构：Raw Sources、Schema、LLM Maintainer 与 Persistent Wiki](assets/llm-wiki-architecture.png)
 
 _图 1：原始资料保持只读，Schema 约束 LLM 的维护行为，Wiki 作为持续积累的知识制品供人和工具探索。_
 
@@ -127,7 +127,7 @@ Schema 不必一次设计完美。合理方式是从最小规则开始，在实�
 
 ## 四、三个核心操作
 <!-- 这是一张图片，ocr 内容为： -->
-![LLM Wiki 的 Ingest、Query 与 Lint 工程流水线](https://intranetproxy.alipay.com/skylark/lark/0/2026/png/78825/1786789246799-4b4a222f-ff4e-4fee-a403-2730d32d76ed.png)
+![LLM Wiki 的 Ingest、Query 与 Lint 工程流水线](assets/llm-wiki-workflow.png)
 
 _图 2：人负责选资料、定方向和做判断；LLM 负责增量编译、探索沉淀与知识维护。_
 

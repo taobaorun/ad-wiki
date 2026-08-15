@@ -1,0 +1,6 @@
+interface:
+  display_name: "AD Wiki Maintainer"
+  short_description: "Maintain team OKF knowledge with traceable workflows"
+  default_prompt: "Use $ad-wiki-maintainer to initialize and maintain the current repository as an AD Wiki."
+policy:
+  allow_implicit_invocation: true

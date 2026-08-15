@@ -1,0 +1,20 @@
+{
+  "name": "ad-wiki-team",
+  "interface": {
+    "displayName": "AD Wiki Team"
+  },
+  "plugins": [
+    {
+      "name": "ad-wiki",
+      "source": {
+        "source": "local",
+        "path": "./plugins/ad-wiki"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

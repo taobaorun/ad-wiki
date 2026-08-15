@@ -1,0 +1,36 @@
+{
+  "bundle_root": "wiki",
+  "domain": {
+    "concept_types": [
+      "Source Summary",
+      "Entity",
+      "Concept",
+      "Synthesis",
+      "Decision",
+      "Open Question",
+      "Attested Computation"
+    ],
+    "name": "llm-wiki"
+  },
+  "ingest": {
+    "default_status": "draft",
+    "max_batch_size": 1,
+    "mode": "supervised"
+  },
+  "lint": {
+    "broken_links": "warning",
+    "missing_claim_source": "error",
+    "orphan_pages": "warning",
+    "stale_content": "warning"
+  },
+  "profile_version": "0.1",
+  "raw_root": "raw",
+  "review": {
+    "high_risk": "pre_apply",
+    "medium_risk": "post_apply"
+  },
+  "search": {
+    "mcp_threshold_pages": 1000,
+    "provider": "builtin"
+  }
+}

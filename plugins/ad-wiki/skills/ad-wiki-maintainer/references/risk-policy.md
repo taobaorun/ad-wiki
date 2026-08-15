@@ -13,6 +13,8 @@ Escalate when a low-risk change unexpectedly changes an existing conclusion or e
 
 Do not infer commit, push, PR, Marketplace installation, deletion, or permission authority from permission to edit working-tree files.
 
+Stage the complete semantic write set before approval. Low risk may use `process:ad-wiki` auto-approval. Medium risk requires clear write authority and a real post-apply reviewer. High risk requires a real configured owner before apply. Actor strings are audit assertions, not authentication; never record a person who did not actually approve or review.
+
 For medium and high risk, include these review facts:
 
 - claims added, changed, weakened, or removed;

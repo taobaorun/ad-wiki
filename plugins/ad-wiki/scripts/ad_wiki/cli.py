@@ -18,6 +18,14 @@ from .core import (
     validate_repository,
     write_run_report,
 )
+from .runtime import (
+    apply_run,
+    approve_run,
+    migrate_repository,
+    prepare_run,
+    review_run,
+    search_repository,
+)
 
 
 Runner = Callable[[argparse.Namespace], tuple[dict[str, Any], int]]
@@ -136,3 +144,89 @@ def report_main(argv: Sequence[str] | None = None) -> int:
         return payload, 0
 
     return _execute(parser, runner, argv)
+
+
+def prepare_main(argv: Sequence[str] | None = None) -> int:
+    parser = _base_parser("Prepare a baseline-bound staged AD-Wiki write transaction.")
+    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--operation", required=True, choices=["ingest", "writeback", "lint", "migrate"])
+    parser.add_argument("--risk", required=True, choices=["low", "medium", "high"])
+    parser.add_argument("--input", action="append", default=[], dest="inputs")
+    parser.add_argument("--read", action="append", default=[], dest="read_set")
+    parser.add_argument("--write", action="append", required=True, dest="write_set")
+    return _execute(
+        parser,
+        lambda args: (
+            prepare_run(
+                args.repo,
+                run_id=args.run_id,
+                operation=args.operation,
+                risk=args.risk,
+                inputs=args.inputs,
+                read_set=args.read_set,
+                write_set=args.write_set,
+            ),
+            0,
+        ),
+        argv,
+    )
+
+
+def approve_main(argv: Sequence[str] | None = None) -> int:
+    parser = _base_parser("Approve a complete staged AD-Wiki transaction.")
+    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--by", dest="actor", help="real approval actor; required for medium/high risk")
+    return _execute(
+        parser,
+        lambda args: (approve_run(args.repo, run_id=args.run_id, actor=args.actor), 0),
+        argv,
+    )
+
+
+def apply_main(argv: Sequence[str] | None = None) -> int:
+    parser = _base_parser("Apply, index, log, validate, and finalize an approved staged transaction.")
+    parser.add_argument("--run-id", required=True)
+    return _execute(parser, lambda args: (apply_run(args.repo, run_id=args.run_id), 0), argv)
+
+
+def review_main(argv: Sequence[str] | None = None) -> int:
+    parser = _base_parser("Record a real review of a validated AD-Wiki transaction.")
+    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--by", required=True, dest="actor")
+    parser.add_argument("--decision", required=True, choices=["approved", "rejected"])
+    parser.add_argument("--note")
+    return _execute(
+        parser,
+        lambda args: (
+            review_run(
+                args.repo,
+                run_id=args.run_id,
+                actor=args.actor,
+                decision=args.decision,
+                note=args.note,
+            ),
+            0,
+        ),
+        argv,
+    )
+
+
+def search_main(argv: Sequence[str] | None = None) -> int:
+    parser = _base_parser("Search the current AD-Wiki Bundle without mutating it.")
+    parser.add_argument("--query", required=True)
+    parser.add_argument("--limit", type=int, default=10)
+    return _execute(
+        parser,
+        lambda args: (search_repository(args.repo, query=args.query, limit=args.limit), 0),
+        argv,
+    )
+
+
+def migrate_main(argv: Sequence[str] | None = None) -> int:
+    parser = _base_parser("Inspect or run a supported deterministic AD-Wiki Profile migration.")
+    parser.add_argument("--target-profile", default="0.1")
+    return _execute(
+        parser,
+        lambda args: (migrate_repository(args.repo, target_profile=args.target_profile), 0),
+        argv,
+    )

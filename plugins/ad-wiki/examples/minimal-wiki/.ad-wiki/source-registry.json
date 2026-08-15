@@ -1,0 +1,14 @@
+{
+  "sources": [
+    {
+      "author": "human:karpathy",
+      "canonical_locator": "https://gist.github.com/karpathy/442c7fa2bf9a7b1b439a9e4f0322a0aa",
+      "path": "raw/inbox/llm-wiki.md",
+      "registered_at": "2026-08-15T00:00:00Z",
+      "sha256": "e808df86b3afef250fcff5249c221e8c7d324343c002219b1a17349c8533ac2c",
+      "source_id": "SRC-E808DF86B3AF",
+      "version": 1
+    }
+  ],
+  "version": 1
+}

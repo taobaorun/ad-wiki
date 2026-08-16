@@ -22,6 +22,7 @@ from ad_wiki.core import (  # noqa: E402
 from ad_wiki.runtime import (  # noqa: E402
     apply_run,
     approve_run,
+    build_query_context,
     migrate_repository,
     prepare_run,
     review_run,
@@ -435,7 +436,123 @@ class SearchAndPolicyTests(RuntimeTestCase):
         }
         self.assertEqual(result["results"][0]["concept_id"], "concepts/compilation")
         self.assertEqual(result["results"][0]["sources"][0]["id"], "source-a")
+        self.assertEqual(result["total"], 1)
         self.assertEqual(before, after)
+
+    def test_builds_a_stable_read_only_context_envelope(self) -> None:
+        first = self.repo / "wiki/concepts/compilation.md"
+        second = self.repo / "wiki/concepts/persistence.md"
+        first.write_text(concept_text("Incremental Compilation"))
+        second.write_text(concept_text("Persistent Wiki"))
+        build_indexes(self.repo)
+        before = {
+            path.relative_to(self.repo).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in self.repo.rglob("*")
+            if path.is_file()
+        }
+
+        envelope = build_query_context(
+            self.repo,
+            query="persistent wiki compilation",
+            max_concepts=8,
+            max_chars=30_000,
+        )
+        repeated = build_query_context(
+            self.repo,
+            query="persistent wiki compilation",
+            max_concepts=8,
+            max_chars=30_000,
+        )
+
+        after = {
+            path.relative_to(self.repo).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in self.repo.rglob("*")
+            if path.is_file()
+        }
+        self.assertEqual(envelope["schema_version"], "1")
+        self.assertEqual(envelope["repository"]["bundle"], "wiki")
+        self.assertEqual(envelope["repository"]["content_language"], "zh-CN")
+        self.assertEqual(envelope["repository"]["domain"], "research")
+        self.assertEqual(envelope["repository"]["okf_version"], "0.2")
+        self.assertEqual(envelope["repository"]["profile_version"], "0.1")
+        self.assertEqual(envelope["retrieval"]["candidate_count"], 2)
+        self.assertEqual(envelope["retrieval"]["included_count"], 2)
+        self.assertFalse(envelope["retrieval"]["truncated"])
+        self.assertEqual(envelope["concepts"][0]["concept_id"], "concepts/persistence")
+        self.assertIn("# Persistent Wiki", envelope["concepts"][0]["content"])
+        self.assertFalse(envelope["concepts"][0]["content_truncated"])
+        self.assertFalse(Path(envelope["concepts"][0]["path"]).is_absolute())
+        self.assertEqual(envelope, repeated)
+        self.assertEqual(before, after)
+
+    def test_query_context_enforces_deterministic_limits(self) -> None:
+        (self.repo / "wiki/concepts/compilation.md").write_text(concept_text())
+        (self.repo / "wiki/concepts/persistence.md").write_text(concept_text("Persistent Wiki"))
+        build_indexes(self.repo)
+
+        character_limited = build_query_context(
+            self.repo,
+            query="persistent wiki",
+            max_concepts=8,
+            max_chars=20,
+        )
+        self.assertEqual(character_limited["retrieval"]["included_chars"], 20)
+        self.assertEqual(len(character_limited["concepts"]), 1)
+        self.assertEqual(len(character_limited["concepts"][0]["content"]), 20)
+        self.assertTrue(character_limited["concepts"][0]["content_truncated"])
+        self.assertTrue(character_limited["retrieval"]["truncated"])
+
+        concept_limited = build_query_context(
+            self.repo,
+            query="persistent wiki",
+            max_concepts=1,
+            max_chars=30_000,
+        )
+        self.assertEqual(concept_limited["retrieval"]["candidate_count"], 2)
+        self.assertEqual(concept_limited["retrieval"]["included_count"], 1)
+        self.assertTrue(concept_limited["retrieval"]["truncated"])
+
+    def test_query_context_rejects_out_of_range_limits(self) -> None:
+        for value in (0, 101):
+            with self.subTest(max_concepts=value):
+                with self.assertRaisesRegex(ADWikiError, "max-concepts"):
+                    build_query_context(self.repo, query="wiki", max_concepts=value)
+        for value in (0, 1_000_001):
+            with self.subTest(max_chars=value):
+                with self.assertRaisesRegex(ADWikiError, "max-chars"):
+                    build_query_context(self.repo, query="wiki", max_chars=value)
+
+    def test_query_context_does_not_expose_hidden_bundle_markdown(self) -> None:
+        hidden = self.repo / "wiki/.private/secret.md"
+        hidden.parent.mkdir()
+        hidden.write_text(concept_text("Secret Wiki"))
+        visible = self.repo / "wiki/concepts/visible.md"
+        visible.write_text(concept_text("Visible Wiki"))
+        build_indexes(self.repo)
+
+        envelope = build_query_context(self.repo, query="wiki")
+
+        self.assertEqual(
+            [item["concept_id"] for item in envelope["concepts"]],
+            ["concepts/visible"],
+        )
+
+    def test_query_context_represents_no_matches_without_fallback_content(self) -> None:
+        (self.repo / "wiki/concepts/compilation.md").write_text(concept_text())
+        build_indexes(self.repo)
+
+        envelope = build_query_context(self.repo, query="unfindable-token")
+
+        self.assertEqual(envelope["retrieval"]["candidate_count"], 0)
+        self.assertEqual(envelope["retrieval"]["included_count"], 0)
+        self.assertFalse(envelope["retrieval"]["truncated"])
+        self.assertEqual(envelope["concepts"], [])
+
+    def test_query_context_refuses_an_explicitly_unsupported_okf_version(self) -> None:
+        (self.repo / "wiki/index.md").write_text('---\nokf_version: "9.9"\n---\n')
+
+        with self.assertRaisesRegex(ADWikiError, "unsupported OKF version 9.9"):
+            build_query_context(self.repo, query="wiki")
 
     def test_lint_policy_controls_severity_and_domain_types_are_visible(self) -> None:
         config_path = self.repo / "ad-wiki.yaml"

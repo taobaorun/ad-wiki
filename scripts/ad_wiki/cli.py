@@ -21,6 +21,7 @@ from .core import (
 from .runtime import (
     apply_run,
     approve_run,
+    build_query_context,
     migrate_repository,
     prepare_run,
     review_run,
@@ -243,6 +244,26 @@ def search_main(argv: Sequence[str] | None = None) -> int:
     return _execute(
         parser,
         lambda args: (search_repository(args.repo, query=args.query, limit=args.limit), 0),
+        argv,
+    )
+
+
+def query_context_main(argv: Sequence[str] | None = None) -> int:
+    parser = _base_parser("Build a bounded read-only context envelope for one AD-Wiki query.")
+    parser.add_argument("--query", required=True)
+    parser.add_argument("--max-concepts", type=int, default=8)
+    parser.add_argument("--max-chars", type=int, default=30_000)
+    return _execute(
+        parser,
+        lambda args: (
+            build_query_context(
+                args.repo,
+                query=args.query,
+                max_concepts=args.max_concepts,
+                max_chars=args.max_chars,
+            ),
+            0,
+        ),
         argv,
     )
 

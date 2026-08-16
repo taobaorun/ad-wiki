@@ -91,7 +91,7 @@ Runtime 使用一个有效语言解析 helper：字段缺失返回 `zh-CN`，字
 - 根和子目录 `index.md` 的标题、章节名与空状态；
 - `wiki/log.md` 的标题和事务条目。
 
-Concept 正文与 Query 回答由 Maintainer Skill 按配置生成。稳定的目录名、frontmatter key、operation、risk、run id、source id、错误码和 CLI JSON key 保持英文，避免破坏协议与自动化。
+Concept 正文由 Maintainer Skill、Query 回答由 Query Skill 按配置生成。稳定的目录名、frontmatter key、operation、risk、run id、source id、错误码和 CLI JSON key 保持英文，避免破坏协议与自动化。
 
 ## 5. 兼容、恢复与失败处理
 

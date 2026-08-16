@@ -5,7 +5,6 @@
 - [Shared write protocol](#shared-write-protocol)
 - [Init](#init)
 - [Ingest](#ingest)
-- [Query](#query)
 - [Writeback](#writeback)
 - [Lint](#lint)
 - [Migrate](#migrate)
@@ -20,7 +19,7 @@ For every operation that can change knowledge:
 
 1. Resolve the repository and configured roots.
 2. Run preflight checks and Raw guard.
-3. Search, then read only relevant Concepts and sources.
+3. Run `build_query_context.py`, then read only relevant Concepts and sources for impact analysis.
 4. Run `prepare_run.py` with inputs, complete read set, complete write set, and risk.
 5. Write proposed content only beneath `.ad-wiki/runs/<run-id>/staged/`, mirroring each target's repository-relative path.
 6. Inspect the staged diff and obtain the approval required by the risk policy. Run `approve_run.py`; never invent a human actor.
@@ -67,27 +66,15 @@ Confirm that `raw/`, `wiki/`, `.ad-wiki/`, `ad-wiki.yaml`, root `index.md`, and 
 1. Require the source to already exist under `raw/`.
 2. Register it with a stable URL, URN, or other canonical locator.
 3. Treat an unchanged locator and content hash as already processed.
-4. Search for related Concepts before reading the minimum relevant set.
+4. Build a bounded query context for related Concepts before reading the minimum relevant set.
 5. Create a Source Summary and update existing entity, concept, synthesis, question, and contradiction pages as needed.
 6. Classify new evidence as `strengthens`, `weakens`, `contextualizes`, `contradicts`, or `supersedes` in prose and links.
 
 Default to one supervised source. A Source Summary alone is incomplete when the source affects existing knowledge.
 
-## Query
-
-Run:
-
-```bash
-python <plugin>/scripts/search_wiki.py --repo <repo> --query <terms> --limit 10 --json
-```
-
-Read the returned Concepts before Raw. Return to Raw only to verify evidence or fill a documented gap. Answer with citations, expose uncertainty, and do not mutate by default. Search is lexical candidate retrieval, not proof; verify important claims against Concept provenance.
-
-At the end, state whether the result is a writeback candidate and identify the proposed target Concept. Do not write it until write authority is clear.
-
 ## Writeback
 
-Write back durable comparisons, analyses, decisions, reusable explanations, and knowledge gaps. Skip temporary status, formatting-only output, and duplicate summaries. Apply the shared staged-write protocol as a separate operation from Query.
+Write back durable comparisons, analyses, decisions, reusable explanations, and knowledge gaps. Skip temporary status, formatting-only output, and duplicate summaries. Rebuild the bounded query context to establish the current impact set, then apply the shared staged-write protocol as an independent maintenance operation.
 
 ## Lint
 

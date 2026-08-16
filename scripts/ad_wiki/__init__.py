@@ -12,6 +12,7 @@ from .core import (
 from .runtime import (
     apply_run,
     approve_run,
+    build_query_context,
     migrate_repository,
     prepare_run,
     review_run,
@@ -28,6 +29,7 @@ __all__ = [
     "write_run_report",
     "prepare_run",
     "approve_run",
+    "build_query_context",
     "apply_run",
     "review_run",
     "search_repository",

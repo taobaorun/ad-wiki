@@ -177,6 +177,19 @@ Knowledge is compiled once and maintained.[^paper]
             "persistent compilation",
         )
         self.assertEqual(searched["results"][0]["concept_id"], "concepts/paper")
+        context = self.run_cli(
+            "build_query_context.py",
+            "--repo",
+            str(self.repo),
+            "--query",
+            "persistent compilation",
+            "--max-concepts",
+            "4",
+            "--max-chars",
+            "10000",
+        )
+        self.assertEqual(context["schema_version"], "1")
+        self.assertEqual(context["concepts"][0]["concept_id"], "concepts/paper")
         reviewed = self.run_cli(
             "review_run.py",
             "--repo",

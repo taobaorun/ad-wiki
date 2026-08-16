@@ -27,14 +27,18 @@ Product Context: 本文同时记录当前版本的持久产品边界
 - R14 — AD-Wiki 作为单 Plugin 仓库时，仓库根必须直接作为 Plugin 根，Skill 统一放在可扩展的根级 `skills/`；acceptance: 仓库不存在 `plugins/ad-wiki` 包装层，两个 Marketplace source 均为 `./`，新增并列 Skill 不需要修改 Plugin 根或复制 Runtime；owner/method: engineering，目录与 packaging contract test；provenance: 用户于 2026-08-16 参考真实 Plugin 仓库后确认的发行结构。
 - R15 — `review.owners` 只作为高风险事务的真实 human 事前审批白名单；acceptance: 空 owner 列表不影响低风险或中风险工作流，但高风险 Apply 必须失败并给出可操作提示；非空时只有列出的 `human:<id>` 可以批准高风险事务；中风险仍由任意具名 human 完成事后 Review，不被 owner 白名单限制；owner/actor 身份由现有 Git/PR 权限系统负责，AD-Wiki 不宣称完成认证；owner/method: engineering，状态机、CLI 与策略测试；provenance: 用户于 2026-08-16 接受 owner 推荐语义。
 - R16 — Init 必须持久化团队 Wiki 的内容语言，默认 `zh-CN`，并允许显式选择 `en`；acceptance: 新仓库配置、初始化说明、Index 与 Log 使用所选语言，后续 Skill 生成的标题、摘要、正文和默认回答遵循该语言；Raw、代码、专有标识和引用原文不翻译；旧仓库缺少字段时按 `zh-CN` 解释但不自动重写已有内容；owner/method: engineering，Init、兼容、模板/Skill 与端到端测试；provenance: 用户于 2026-08-16 接受语言推荐并指定默认值 `zh-CN`。
+- R17 — 面向用户的 Wiki Query 必须由独立的只读 `ad-wiki-query` Skill 提供，`ad-wiki-maintainer` 不再暴露 Query 操作；acceptance: Plugin 同时发现两个 canonical Skill，Query Skill 不把 Prepare、Approve、Apply、Review 等写入入口呈现为可执行步骤，Maintainer 的公开路由不包含 Query；owner/method: engineering，Skill/packaging contract tests；provenance: 用户于 2026-08-16 确认针对 Query 单独创建 Skill，并接受职责边界。
+- R18 — Query Skill 与 Maintainer 必须复用同一个仓库本地 Retrieval/Context Core，而不是复制完整 Query Prompt 或建立 Skill-to-Skill 依赖；acceptance: `build_query_context.py` 对显式 `--repo` 和 query 生成稳定、带 provenance 的 JSON Context Envelope，两个 Skill 都调用该入口，任一方不需要读取另一方的 `SKILL.md`；owner/method: engineering，CLI、隔离与静态依赖测试；provenance: 用户确认“共享 Retrieval/Context Core，不共享完整 Query Contract”。
+- R19 — Query 过程必须保持只读，Context Envelope 只装配配置和相关 Concept，不自动写回或自动注入 Raw；acceptance: Query 前后目标仓库文件字节一致，Envelope 包含内容语言、领域、候选 Concept 正文、路径和 sources，并明确截断状态；有持久价值的结果只能返回 Writeback candidate，由用户确认后交给 Maintainer；owner/method: engineering，端到端 byte-diff、schema 与 Skill 行为测试；provenance: 已接受的 Query/Writeback 分离和本轮最小实现边界。
 
 ## In scope
 
 - 团队统一分发、同时支持 Codex 与 Claude Code 原生安装的 AD-Wiki Plugin；
 - 两个宿主各自的薄 Plugin Manifest 和 Marketplace Catalog；
-- 根级、可扩展的 `skills/` 集合；当前包含 `ad-wiki-maintainer` Skill 和少量仓库领域配置；
+- 根级、可扩展的 `skills/` 集合；包含只读 `ad-wiki-query`、写入维护 `ad-wiki-maintainer` 和少量仓库领域配置；
 - 单仓库 Init、Ingest、Query、Writeback、Lint、Migrate；
 - builtin repository-local search；
+- repository-local Query Context Envelope builder；
 - Raw Source 注册、哈希和不可变保护；
 - 精确 write set、baseline、审批、锁、回滚、校验、Review、Index 和 Log；
 - 可选初始化 owner、高风险 owner 门禁，以及不依赖 AD-Wiki 身份系统的具名 human 审计记录；
@@ -52,13 +56,14 @@ Product Context: 本文同时记录当前版本的持久产品边界
 - Attested Runtime、通用代码执行、数据仓库凭据、Receipt/Verdict；
 - 自动迁移所有团队仓库、自动合并 PR 或修改默认分支；
 - AD-Wiki 自建身份认证、把 actor 字符串宣称为已认证身份、自动翻译 Raw 或批量改写既有 Wiki；
+- 普通 LLM API 的 SDK Adapter、Query HTTP API、自动 Raw context 注入或 Skill-to-Skill 编排；
 - 本轮没有明确要求的本地批量导入器。
 
 ## Constraints and confirmed decisions
 
 - Markdown/OKF Bundle 和 Git 始终是知识真源；索引或工具输出不能替代它们。
 - 每个知识库独立保存内容和少量领域配置，不复制整套提示词。
-- 仓库根就是双宿主共享的唯一 Plugin 根；所有 Skill 位于根级 `skills/`，当前包含 `ad-wiki-maintainer`，未来可以继续新增 Skill，而宿主 Manifest 不承载维护流程正文。
+- 仓库根就是双宿主共享的唯一 Plugin 根；所有 Skill 位于根级 `skills/`，当前包含 `ad-wiki-query` 与 `ad-wiki-maintainer`，未来可以继续新增 Skill，而宿主 Manifest 不承载工作流正文。
 - Plugin 不保存具体团队知识、访问令牌或组织权限数据。
 - 本地搜索故障不能影响人直接读取 Markdown。
 - 当前 Plugin 可以理解 `Attested Computation` 内容类型，但不得暗示具备执行或 Attestation 能力。
@@ -67,12 +72,16 @@ Product Context: 本文同时记录当前版本的持久产品边界
 - `review.owners` 为空表示尚未授予高风险审批权，不表示知识库不可用；owner 必须是 `human:<id>`，且只限制高风险事前审批。
 - 中风险事务仍需要明确写入授权和真实 `human:<id>` 事后 Review；配置 owner 不把日常 Ingest Review 集中到 owner。
 - 内容语言默认 `zh-CN`；它约束 Agent 生成的知识表达，不改变 Raw、代码、引用、稳定标识或已有文件路径。
+- `ad-wiki-query` 独占面向用户的问答与只读 Query Contract；`ad-wiki-maintainer` 只在维护流程中使用 Retrieval/Context Core 分析现有知识和影响面。
+- 两个 Skill 直接依赖同一个确定性 Context Builder，不互相调用，也不在每个团队 Wiki 中保存 Query Prompt。
+- Context Builder 默认只装配 Concept；Raw 仍由 Query Skill 在确需核实证据时按已有仓库边界单独读取。
 
 ## Delegated engineering defaults and boundaries
 
 - 工程可以在不改变行为契约的前提下选择本地、可逆的文件布局、Python helper、测试 fixture 和性能优化。
 - 工程可以加强当前仓库内的路径、事务、Lint、索引和安全校验，只要不引入远程依赖或新的用户可见流程。
 - 工程可以选择最小的配置字段和 CLI 参数表达 owner 与内容语言，只要保持向后兼容、错误可操作，且不把 actor 字符串提升为认证机制。
+- 工程可以定义最小、版本化的本地 Context Envelope、字符预算和确定性截断规则，只要结果带来源、保持只读并且不改变 OKF/Profile 数据格式。
 - 任何远程服务、MCP Server、App、组织身份、Connector、后台 Worker、跨仓库能力或外部计算权限都超出默认授权，必须获得新的 Product Contract。
 - 本地批量导入若未来提出，必须仍以一个目标仓库、每来源可追溯、Raw 不可变和现有事务门禁为基础，并单独确认其用户体验和自动化等级。
 

@@ -1,5 +1,6 @@
 {
   "bundle_root": "wiki",
+  "content_language": "en",
   "domain": {
     "concept_types": [
       "Source Summary",

@@ -2,6 +2,8 @@
 
 Use `wiki/` as the OKF v0.2 Knowledge Bundle root. Treat every Markdown file except `index.md` and `log.md` as a Concept.
 
+Use the repository's `content_language` for generated human-readable titles, descriptions, sections, and answers. Supported values are `zh-CN` and `en`; a missing field means `zh-CN`. This language preference does not translate Raw, code, quotations, proper identifiers, OKF keys, source IDs, or paths.
+
 ## Identity and links
 
 - Derive the Concept ID from the path relative to `wiki/`, without `.md`.

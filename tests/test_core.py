@@ -50,10 +50,49 @@ class InitializeRepositoryTests(RepositoryTestCase):
         self.assertEqual(config["profile_version"], "0.1")
         self.assertEqual(config["bundle_root"], "wiki")
         self.assertEqual(config["domain"]["name"], "architecture-decisions")
+        self.assertEqual(config["content_language"], "zh-CN")
+        self.assertEqual(config["review"]["owners"], [])
+        self.assertEqual(len(result["warnings"]), 1)
+        self.assertIn("高风险", result["warnings"][0])
 
         index = (self.repo / "wiki/index.md").read_text()
         self.assertIn('okf_version: "0.2"', index)
+        self.assertIn("# 知识包索引", index)
+        self.assertTrue((self.repo / "wiki/log.md").read_text().startswith("# 知识包更新日志"))
+        self.assertIn("# 领域配置", (self.repo / ".ad-wiki/domain.md").read_text())
+
+    def test_supports_explicit_english_and_initial_human_owners(self) -> None:
+        result = initialize_repository(
+            self.repo,
+            domain="research",
+            content_language="en",
+            owners=["human:bob", "human:alice", "human:bob"],
+        )
+
+        config = json.loads((self.repo / "ad-wiki.yaml").read_text())
+        self.assertEqual(config["content_language"], "en")
+        self.assertEqual(config["review"]["owners"], ["human:alice", "human:bob"])
+        self.assertEqual(result["warnings"], [])
+        self.assertIn("# Domain Overlay", (self.repo / ".ad-wiki/domain.md").read_text())
+        self.assertIn("# Knowledge Bundle Index", (self.repo / "wiki/index.md").read_text())
         self.assertTrue((self.repo / "wiki/log.md").read_text().startswith("# Knowledge Bundle Update Log"))
+
+    def test_rejects_invalid_language_and_owner_before_initialization(self) -> None:
+        with self.assertRaisesRegex(ADWikiError, "content_language"):
+            initialize_repository(self.repo, content_language="fr")
+        self.assertFalse((self.repo / "raw").exists())
+
+        with self.assertRaisesRegex(ADWikiError, "content_language"):
+            initialize_repository(self.repo, content_language=[])  # type: ignore[arg-type]
+        self.assertFalse((self.repo / "raw").exists())
+
+        with self.assertRaisesRegex(ADWikiError, "human:<id>"):
+            initialize_repository(self.repo, owners=["process:ad-wiki"])
+        self.assertFalse((self.repo / "wiki").exists())
+
+        with self.assertRaisesRegex(ADWikiError, "human:<id>"):
+            initialize_repository(self.repo, owners=3)  # type: ignore[arg-type]
+        self.assertFalse((self.repo / "wiki").exists())
 
     def test_is_idempotent_but_never_overwrites_non_identical_files(self) -> None:
         self.init_repo()
@@ -196,9 +235,40 @@ status: draft
         second = build_indexes(self.repo)
 
         self.assertIn('okf_version: "0.2"', first_root)
+        self.assertIn("# 知识包索引", first_root)
+        self.assertIn("## 概念", first_nested)
         self.assertIn("[Incremental Compilation](/concepts/compilation.md)", first_nested)
         self.assertEqual(second["changed"], [])
         self.assertIn("wiki/index.md", first["changed"])
+
+    def test_missing_language_is_backward_compatible_without_config_rewrite(self) -> None:
+        config_path = self.repo / "ad-wiki.yaml"
+        config = json.loads(config_path.read_text())
+        del config["content_language"]
+        config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+        before = config_path.read_bytes()
+
+        report = validate_repository(self.repo, today=date(2026, 8, 15))
+        build_indexes(self.repo)
+
+        self.assertTrue(report["ok"], report)
+        self.assertEqual(config_path.read_bytes(), before)
+        self.assertIn("# 知识包索引", (self.repo / "wiki/index.md").read_text())
+
+    def test_rejects_unsupported_configured_content_language(self) -> None:
+        config_path = self.repo / "ad-wiki.yaml"
+        config = json.loads(config_path.read_text())
+        for value in ("fr", []):
+            with self.subTest(value=value):
+                config["content_language"] = value
+                config_path.write_text(json.dumps(config))
+
+                report = validate_repository(self.repo, today=date(2026, 8, 15))
+
+                self.assertIn("ADW-E109", [item["code"] for item in report["errors"]])
+                self.assertTrue(any("content_language" in item["message"] for item in report["errors"]))
+                with self.assertRaisesRegex(ADWikiError, "content_language"):
+                    build_indexes(self.repo)
 
     def test_index_build_refuses_implicit_profile_or_okf_migration(self) -> None:
         config_path = self.repo / "ad-wiki.yaml"
@@ -385,7 +455,7 @@ verified:
         config = json.loads(config_path.read_text())
         config["lint"]["broken_links"] = "sometimes"
         config["ingest"]["max_batch_size"] = 0
-        config["review"]["owners"] = ["not an actor"]
+        config["review"]["owners"] = ["process:ad-wiki"]
         config["search"]["provider"] = "uninstalled-mcp"
         config_path.write_text(json.dumps(config))
 
@@ -393,6 +463,7 @@ verified:
         codes = [item["code"] for item in report["errors"]]
         self.assertIn("ADW-E107", codes)
         self.assertGreaterEqual(codes.count("ADW-E109"), 3)
+        self.assertTrue(any("human:<id>" in item["message"] for item in report["errors"]))
 
 
 class RunReportTests(RepositoryTestCase):

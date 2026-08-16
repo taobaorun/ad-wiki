@@ -83,6 +83,8 @@ class PackagingTests(unittest.TestCase):
         self.assertNotIn("TODO", skill)
         self.assertIn("${CLAUDE_SKILL_DIR}", skill)
         self.assertIn("<plugin-root>/scripts/", skill)
+        self.assertIn("content_language", skill)
+        self.assertIn("--owner human:<id>", skill)
         self.assertNotIn("`../../scripts/", skill)
         for name in ("okf-profile.md", "workflows.md", "risk-policy.md", "migration-policy.md"):
             self.assertIn(f"references/{name}", skill)
@@ -115,6 +117,13 @@ class PackagingTests(unittest.TestCase):
             self.assertIn("status: draft", text, name)
             self.assertIn(f"by: ad-wiki/{PLUGIN_VERSION}", text, name)
             self.assertNotIn("verified:", text, name)
+            localized = templates / "zh-CN" / name
+            self.assertTrue(localized.is_file(), localized)
+            localized_text = localized.read_text()
+            self.assertIn(f"type: {expected_type}", localized_text, name)
+            self.assertIn("status: draft", localized_text, name)
+            self.assertIn(f"by: ad-wiki/{PLUGIN_VERSION}", localized_text, name)
+            self.assertNotIn("verified:", localized_text, name)
 
     def test_team_usable_runtime_entrypoints_are_packaged(self) -> None:
         scripts = PLUGIN_ROOT / "scripts"
@@ -132,6 +141,7 @@ class PackagingTests(unittest.TestCase):
         example = PLUGIN_ROOT / "examples/minimal-wiki"
         report = validate_repository(example, today=date(2026, 8, 15))
         self.assertTrue(report["ok"], report)
+        self.assertEqual(json.loads((example / "ad-wiki.yaml").read_text())["content_language"], "en")
         self.assertTrue((example / "wiki/index.md").is_file())
         self.assertTrue((example / ".ad-wiki/source-registry.json").is_file())
 

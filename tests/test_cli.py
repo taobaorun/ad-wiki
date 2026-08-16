@@ -29,6 +29,7 @@ class CLILifecycleTests(unittest.TestCase):
     def test_complete_local_lifecycle(self) -> None:
         initialized = self.run_cli("init_bundle.py", "--repo", str(self.repo), "--domain", "research")
         self.assertEqual(initialized["status"], "created")
+        self.assertEqual(json.loads((self.repo / "ad-wiki.yaml").read_text())["content_language"], "zh-CN")
 
         source = self.repo / "raw/inbox/paper.md"
         source.write_text("paper contents\n")
@@ -203,6 +204,26 @@ Knowledge is compiled once and maintained.[^paper]
         malformed = self.run_cli("raw_diff_guard.py", "--repo", str(self.repo), expected=2)
         self.assertEqual(malformed["status"], "error")
         self.assertIn("malformed source registry record", malformed["error"])
+
+    def test_init_accepts_language_and_repeatable_human_owner(self) -> None:
+        initialized = self.run_cli(
+            "init_bundle.py",
+            "--repo",
+            str(self.repo),
+            "--domain",
+            "research",
+            "--language",
+            "en",
+            "--owner",
+            "human:bob",
+            "--owner",
+            "human:alice",
+        )
+
+        config = json.loads((self.repo / "ad-wiki.yaml").read_text())
+        self.assertEqual(config["content_language"], "en")
+        self.assertEqual(config["review"]["owners"], ["human:alice", "human:bob"])
+        self.assertEqual(initialized["warnings"], [])
 
 
 if __name__ == "__main__":

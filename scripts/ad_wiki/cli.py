@@ -62,7 +62,32 @@ def _execute(parser: argparse.ArgumentParser, runner: Runner, argv: Sequence[str
 def init_main(argv: Sequence[str] | None = None) -> int:
     parser = _base_parser("Initialize an independent AD-Wiki knowledge repository.")
     parser.add_argument("--domain", default="general", help="domain name stored in ad-wiki.yaml")
-    return _execute(parser, lambda args: (initialize_repository(args.repo, args.domain), 0), argv)
+    parser.add_argument(
+        "--language",
+        default="zh-CN",
+        choices=["zh-CN", "en"],
+        help="generated Wiki content language (default: zh-CN)",
+    )
+    parser.add_argument(
+        "--owner",
+        action="append",
+        default=[],
+        dest="owners",
+        help="high-risk human approver as human:<id>; repeat as needed",
+    )
+    return _execute(
+        parser,
+        lambda args: (
+            initialize_repository(
+                args.repo,
+                args.domain,
+                content_language=args.language,
+                owners=args.owners,
+            ),
+            0,
+        ),
+        argv,
+    )
 
 
 def register_main(argv: Sequence[str] | None = None) -> int:

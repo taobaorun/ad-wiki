@@ -221,7 +221,7 @@ sources:
     author: human:karpathy
     last_modified: 2026-04-04
 generated:
-  by: ad-wiki/0.2.0
+  by: ad-wiki/0.3.0
   at: 2026-08-15T19:00:00+08:00
 status: draft
 stale_after: 2027-02-15
@@ -292,11 +292,15 @@ okf_version: "0.2"
 ad-wiki-distribution/
 ├── .agents/
 │   └── plugins/
-│       └── marketplace.json
+│       └── marketplace.json          # Codex Marketplace
+├── .claude-plugin/
+│   └── marketplace.json              # Claude Code Marketplace
 └── plugins/
     └── ad-wiki/
         ├── .codex-plugin/
-        │   └── plugin.json
+        │   └── plugin.json            # Codex Manifest
+        ├── .claude-plugin/
+        │   └── plugin.json            # Claude Code Manifest
         ├── skills/
         │   └── ad-wiki-maintainer/
         │       ├── SKILL.md
@@ -319,7 +323,7 @@ ad-wiki-distribution/
         │   ├── prepare_run.py / approve_run.py
         │   ├── apply_run.py / review_run.py
         │   └── search_wiki.py / migrate_bundle.py
-        └── .mcp.json                # Phase 2 再加入，不作为 MVP 前置
+        └── tests/
 ```
 
 设计原则：
@@ -328,15 +332,18 @@ ad-wiki-distribution/
 + 详细 OKF Profile、风险规则和迁移规则按需加载到 `references/`；
 + 重复且易错的操作交给脚本，不要求模型每次重写；
 + 模板作为 Skill Assets 复用；
++ Codex 与 Claude Code 只维护各自的薄 Manifest/Marketplace，共享唯一 Skill、references、templates 和 Runtime；
 + 不创建冗余 README、Quick Reference 或重复规范；
-+ MVP 不强制 MCP，避免为数百页以内的知识库引入额外服务。
++ 当前版本不包含 MCP，避免为仓库本地 Wiki 构建引入远程服务。
 
 ## 八、Plugin 与 Marketplace 契约
-### 1. Plugin Manifest 建议
+双宿主的字段所有权、缓存路径、升级和验证细节见 [AD-Wiki Codex / Claude Code 双宿主 Plugin 设计](ad-wiki-codex-claude-plugin-compatibility.md)。
+
+### 1. Codex Plugin Manifest
 ```json
 {
   "name": "ad-wiki",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Maintain independent team knowledge bases as continuously compiled OKF bundles.",
   "author": {
     "name": "AD Wiki Team"
@@ -358,9 +365,25 @@ ad-wiki-distribution/
 }
 ```
 
-只有实际创建 `.mcp.json` 后才在 Manifest 增加 `mcpServers`；只有实际创建 App 后才增加 `apps`。不在 Manifest 中声明不存在的能力。
+### 2. Claude Code Plugin Manifest
 
-### 2. 团队 Marketplace 建议
+```json
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "ad-wiki",
+  "displayName": "AD Wiki",
+  "version": "0.3.0",
+  "description": "Maintain independent team knowledge repositories as continuously compiled OKF bundles.",
+  "author": {
+    "name": "AD Wiki Team"
+  },
+  "skills": "./skills/"
+}
+```
+
+两端 Manifest 的正式 `name` 与 `version` 必须一致。Codex 的 `interface` 和 Claude Code 的顶层 `displayName` 属于薄宿主元数据，维护流程只存在于共同的 `skills/ad-wiki-maintainer/SKILL.md`。当前版本不声明 `mcpServers`、`apps`、`hooks`、`agents` 或其他未实现能力。
+
+### 3. Codex 团队 Marketplace
 ```json
 {
   "name": "ad-wiki-team",
@@ -386,15 +409,42 @@ ad-wiki-distribution/
 
 默认使用 `AVAILABLE`，由团队成员主动安装；只有组织明确要求全员默认启用时，才改为 `INSTALLED_BY_DEFAULT`。未提出产品限制时不写 `policy.products`。
 
-### 3. 团队安装方式
-非默认团队 Marketplace 需要先注册，再安装 Plugin：
+### 4. Claude Code 团队 Marketplace
 
-```bash
-codex plugin marketplace add <ad-wiki-distribution-repo-root>
-codex plugin add ad-wiki@ad-wiki-team
+```json
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "ad-wiki-team",
+  "owner": {
+    "name": "AD Wiki Team"
+  },
+  "plugins": [
+    {
+      "name": "ad-wiki",
+      "source": "./plugins/ad-wiki",
+      "description": "Maintain independent team knowledge repositories as continuously compiled OKF bundles.",
+      "category": "productivity"
+    }
+  ]
+}
 ```
 
-安装或升级后使用新线程，让 Codex 重新加载 Plugin 的 Skill 与工具。
+Claude Marketplace 不重复声明版本，以 Plugin 内 `.claude-plugin/plugin.json` 为版本权威。两个 Marketplace 条目都解析到同一个 `plugins/ad-wiki/` 根目录。
+
+### 5. 团队安装方式
+两个宿主都先注册发行仓库，再安装同一个 Plugin：
+
+```bash
+# Codex
+codex plugin marketplace add <ad-wiki-distribution-repo-root>
+codex plugin add ad-wiki@ad-wiki-team
+
+# Claude Code
+claude plugin marketplace add <ad-wiki-distribution-repo-root>
+claude plugin install ad-wiki@ad-wiki-team
+```
+
+Claude Code 中显式调用名为 `/ad-wiki:ad-wiki-maintainer`。安装或升级后使用新线程；Claude Code 也可以按提示执行 `/reload-plugins`。
 
 ## 九、核心 Skill 契约
 ### 1. 触发描述
@@ -570,7 +620,7 @@ DISCOVERED
 {
   "run_id": "run-20260815-001",
   "operation": "ingest",
-  "plugin_version": "0.2.0",
+  "plugin_version": "0.3.0",
   "profile_version": "0.1",
   "inputs": ["raw/sources/karpathy-llm-wiki.md"],
   "source_hashes": {"raw/sources/karpathy-llm-wiki.md": "sha256:..."},
@@ -731,7 +781,7 @@ Raw Source 是不可信数据。来源中出现“忽略规则”“执行命令
 
 ## 十八、团队发布与版本治理
 ### 1. 版本分层
-+ Plugin 使用 SemVer，例如当前可用版 `0.2.0`；
++ Plugin 使用 SemVer，例如当前双宿主兼容版 `0.3.0`；
 + AD-Wiki Profile 单独版本化，例如 `profile_version: "0.1"`；
 + OKF 版本写在 Bundle 根 `index.md`，当前为 `0.2`；
 + 三者不能混成一个版本号。
@@ -747,7 +797,7 @@ Raw Source 是不可信数据。来源中出现“忽略规则”“执行命令
 → 需要时显式执行 Bundle migrate
 ```
 
-开发态可以使用 Cachebuster 触发 Codex 重新安装，但正式团队版本应正常递增 SemVer，并提供兼容性与迁移说明。
+开发态可以使用 Cachebuster 触发 Codex 重新安装，但正式团队版本应在两个 Manifest 中同步递增 SemVer，并提供兼容性与迁移说明。
 
 ### 3. 兼容策略
 + 新 Plugin 必须能读取至少一个旧 Profile 小版本；
@@ -769,7 +819,7 @@ Raw Source 是不可信数据。来源中出现“忽略规则”“执行命令
 ### Phase 1：Plugin MVP
 只实现：
 
-+ 团队 Marketplace；
++ Codex 与 Claude Code 原生团队 Marketplace；
 + `ad-wiki-maintainer` Skill；
 + Init、Ingest、Query、Writeback、Lint；
 + 基础校验脚本与受门禁的事务、搜索、迁移命令；
@@ -801,9 +851,10 @@ Raw Source 是不可信数据。来源中出现“忽略规则”“执行命令
 
 ## 二十、验收标准
 ### Plugin 分发
-+ 团队成员可以从统一 Marketplace 安装 `ad-wiki`；
-+ 新线程能发现并触发 `ad-wiki-maintainer`；
-+ Plugin Manifest、Marketplace 和 Skill 均通过官方校验脚本；
++ 团队成员可以从 Codex 或 Claude Code 的原生 Marketplace 安装同一个 `ad-wiki`；
++ 新线程能发现并触发 canonical `ad-wiki-maintainer`；Claude Code 显式入口为 `/ad-wiki:ad-wiki-maintainer`；
++ 两套 Plugin Manifest、Marketplace 和唯一 Skill 均通过各自官方校验脚本；
++ 两个 Manifest 的正式版本一致，两个 Marketplace 指向同一个 Plugin 根；
 + Plugin 不包含任何具体团队知识或凭据。
 
 ### 多知识库隔离
@@ -842,7 +893,7 @@ Raw Source 是不可信数据。来源中出现“忽略规则”“执行命令
 这套架构同时保留三种独立性：
 
 1. **知识独立**：每个团队掌握自己的内容、权限和 Git 历史；
-2. **协议独立**：Wiki 使用 OKF，脱离 Codex Plugin 仍可读、可迁移；
+2. **协议独立**：Wiki 使用 OKF，脱离 Codex 或 Claude Code Plugin 仍可读、可迁移；
 3. **能力统一**：Workflow、校验器和模板由团队统一升级，避免每个知识库复制 Prompt 后发生漂移。
 
 第一版应优先把 Ingest、Query、Writeback、Lint 和事务门禁做扎实。搜索 MCP、管理 App 和 Attestation Runtime 都是可插拔升级项，不应阻塞最小闭环。

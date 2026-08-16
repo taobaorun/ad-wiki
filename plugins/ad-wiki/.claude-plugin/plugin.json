@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "ad-wiki",
+  "displayName": "AD Wiki",
+  "version": "0.3.0",
+  "description": "Maintain independent team knowledge repositories as continuously compiled OKF bundles.",
+  "author": {
+    "name": "AD Wiki Team"
+  },
+  "keywords": [
+    "knowledge-management",
+    "okf",
+    "wiki"
+  ],
+  "skills": "./skills/"
+}

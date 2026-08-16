@@ -10,6 +10,10 @@
 - [Lint](#lint)
 - [Migrate](#migrate)
 
+## Runtime path
+
+Resolve `<plugin>` from the installed Skill location, never from the knowledge repository working directory. In Claude Code, `<plugin>` is `${CLAUDE_SKILL_DIR}/../..`; in Codex, it is two directories above the absolute installed `SKILL.md` path supplied by the Skill runtime. Normalize the result and require `<plugin>/scripts/` plus the current host Manifest before running a command.
+
 ## Shared write protocol
 
 For every operation that can change knowledge:

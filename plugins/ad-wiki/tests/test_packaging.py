@@ -11,28 +11,74 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 SKILL_ROOT = PLUGIN_ROOT / "skills/ad-wiki-maintainer"
 sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
 
-from ad_wiki.core import validate_repository  # noqa: E402
+from ad_wiki.core import PLUGIN_VERSION, validate_repository  # noqa: E402
 
 
 class PackagingTests(unittest.TestCase):
-    def test_plugin_and_marketplace_contracts_are_team_scoped(self) -> None:
-        plugin = json.loads((PLUGIN_ROOT / ".codex-plugin/plugin.json").read_text())
-        marketplace = json.loads((PLUGIN_ROOT.parents[1] / ".agents/plugins/marketplace.json").read_text())
+    def test_dual_host_plugin_contracts_share_one_release_identity(self) -> None:
+        codex = json.loads((PLUGIN_ROOT / ".codex-plugin/plugin.json").read_text())
+        claude = json.loads((PLUGIN_ROOT / ".claude-plugin/plugin.json").read_text())
+        self.assertEqual(PLUGIN_VERSION, "0.3.0")
 
-        self.assertEqual(plugin["name"], "ad-wiki")
-        self.assertEqual(plugin["version"], "0.2.0")
-        self.assertEqual(plugin["skills"], "./skills/")
-        self.assertNotIn("mcpServers", plugin)
-        self.assertNotIn("apps", plugin)
-        self.assertNotIn("hooks", plugin)
-        self.assertEqual(marketplace["name"], "ad-wiki-team")
-        entry = marketplace["plugins"][0]
-        self.assertEqual(entry["source"]["path"], "./plugins/ad-wiki")
-        self.assertEqual(entry["policy"], {"installation": "AVAILABLE", "authentication": "ON_INSTALL"})
+        for manifest in (codex, claude):
+            self.assertEqual(manifest["name"], "ad-wiki")
+            self.assertEqual(manifest["version"], PLUGIN_VERSION)
+            self.assertEqual(manifest["author"]["name"], "AD Wiki Team")
+            self.assertEqual(manifest["skills"], "./skills/")
+            for deferred in (
+                "mcpServers",
+                "apps",
+                "hooks",
+                "agents",
+                "commands",
+                "lspServers",
+            ):
+                self.assertNotIn(deferred, manifest)
+
+        self.assertIn("interface", codex)
+        self.assertNotIn("interface", claude)
+        self.assertEqual(claude["displayName"], "AD Wiki")
+        self.assertNotIn("+", codex["version"])
+        self.assertNotIn("+", claude["version"])
+
+    def test_dual_host_marketplaces_resolve_the_same_plugin_root(self) -> None:
+        distribution_root = PLUGIN_ROOT.parents[1]
+        codex = json.loads((distribution_root / ".agents/plugins/marketplace.json").read_text())
+        claude = json.loads((distribution_root / ".claude-plugin/marketplace.json").read_text())
+
+        self.assertEqual(codex["name"], "ad-wiki-team")
+        self.assertEqual(claude["name"], "ad-wiki-team")
+        self.assertEqual(len(codex["plugins"]), 1)
+        self.assertEqual(len(claude["plugins"]), 1)
+
+        codex_entry = codex["plugins"][0]
+        claude_entry = claude["plugins"][0]
+        self.assertEqual(codex_entry["name"], "ad-wiki")
+        self.assertEqual(claude_entry["name"], "ad-wiki")
+        self.assertEqual(codex_entry["source"]["path"], "./plugins/ad-wiki")
+        self.assertEqual(claude_entry["source"], "./plugins/ad-wiki")
+        self.assertEqual(
+            codex_entry["policy"],
+            {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
+        )
+        self.assertNotIn("version", claude_entry)
+
+        codex_root = (distribution_root / codex_entry["source"]["path"]).resolve()
+        claude_root = (distribution_root / claude_entry["source"]).resolve()
+        self.assertEqual(codex_root, PLUGIN_ROOT)
+        self.assertEqual(claude_root, PLUGIN_ROOT)
+
+    def test_plugin_has_one_canonical_skill_and_runtime(self) -> None:
+        skills = list(PLUGIN_ROOT.rglob("SKILL.md"))
+        self.assertEqual(skills, [SKILL_ROOT / "SKILL.md"])
+        self.assertEqual(len(list(PLUGIN_ROOT.rglob("scripts/ad_wiki/core.py"))), 1)
 
     def test_skill_has_no_placeholders_and_declares_progressive_resources(self) -> None:
         skill = (SKILL_ROOT / "SKILL.md").read_text()
         self.assertNotIn("TODO", skill)
+        self.assertIn("${CLAUDE_SKILL_DIR}", skill)
+        self.assertIn("<plugin-root>/scripts/", skill)
+        self.assertNotIn("`../../scripts/", skill)
         for name in ("okf-profile.md", "workflows.md", "risk-policy.md", "migration-policy.md"):
             self.assertIn(f"references/{name}", skill)
             self.assertTrue((SKILL_ROOT / "references" / name).is_file())
@@ -62,6 +108,7 @@ class PackagingTests(unittest.TestCase):
             self.assertTrue(text.startswith("---\n"), name)
             self.assertIn(f"type: {expected_type}", text, name)
             self.assertIn("status: draft", text, name)
+            self.assertIn(f"by: ad-wiki/{PLUGIN_VERSION}", text, name)
             self.assertNotIn("verified:", text, name)
 
     def test_team_usable_runtime_entrypoints_are_packaged(self) -> None:

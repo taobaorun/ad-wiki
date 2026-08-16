@@ -12,6 +12,7 @@ from .core import (
     ADWikiError,
     ALLOWED_OPERATIONS,
     ALLOWED_RISKS,
+    HUMAN_ACTOR,
     PLUGIN_VERSION,
     PROFILE_VERSION,
     RUN_ID,
@@ -20,6 +21,7 @@ from .core import (
     _atomic_write_text,
     _bundle_markdown_files,
     _configured_roots,
+    _content_language,
     _frontmatter,
     _load_config,
     _load_registry,
@@ -317,13 +319,20 @@ def _validate_actor(actor: str) -> None:
         raise ADWikiError(f"invalid approval/review actor: {actor}")
 
 
+def _validate_human_actor(actor: str) -> None:
+    if not HUMAN_ACTOR.fullmatch(actor):
+        raise ADWikiError(f"approval/review actor must be a real human:<id>: {actor}")
+
+
 def _review_owners(config: dict[str, Any]) -> list[str]:
     review = config.get("review", {})
     if not isinstance(review, dict):
         raise ADWikiError("review configuration must be a mapping")
     owners = review.get("owners", [])
-    if not isinstance(owners, list) or not all(isinstance(item, str) and ACTOR.fullmatch(item) for item in owners):
-        raise ADWikiError("review.owners must be a list of valid actors")
+    if not isinstance(owners, list) or not all(
+        isinstance(item, str) and HUMAN_ACTOR.fullmatch(item) for item in owners
+    ):
+        raise ADWikiError("review.owners must be a list of human:<id> values")
     return owners
 
 
@@ -348,12 +357,18 @@ def approve_run(
         _validate_actor(approval_actor)
         state = "AUTO_APPROVED"
     else:
+        owners = _review_owners(config) if risk == "high" else []
+        if risk == "high" and not owners:
+            raise ADWikiError(
+                "high-risk run requires at least one human:<id> in review.owners; "
+                "configure review.owners in ad-wiki.yaml"
+            )
         if actor is None:
             raise ADWikiError(f"{risk}-risk run requires an explicit approval actor")
-        _validate_actor(actor)
-        owners = _review_owners(config)
-        if owners and actor not in owners:
-            raise ADWikiError(f"approval actor is not a configured owner: {actor}")
+        _validate_human_actor(actor)
+        if risk == "high":
+            if actor not in owners:
+                raise ADWikiError(f"approval actor is not a configured owner: {actor}")
         approval_actor = actor
         state = "APPROVED"
     report.setdefault("approvals", []).append({"at": _utc_now(), "by": approval_actor, "risk": risk})
@@ -428,13 +443,24 @@ def _restore(snapshot: dict[Path, bytes | None]) -> None:
             _atomic_write_bytes(path, content)
 
 
-def _prepend_log(log_path: Path, run_id: str, operation: str, changed_count: int) -> None:
-    text = log_path.read_text(encoding="utf-8") if log_path.exists() else "# Knowledge Bundle Update Log\n"
+def _prepend_log(
+    log_path: Path,
+    run_id: str,
+    operation: str,
+    changed_count: int,
+    content_language: str,
+) -> None:
+    log_title = "知识包更新日志" if content_language == "zh-CN" else "Knowledge Bundle Update Log"
+    text = log_path.read_text(encoding="utf-8") if log_path.exists() else f"# {log_title}\n"
     if run_id in text:
         raise ADWikiError(f"log already contains run id: {run_id}")
     day = _utc_now()[:10]
     heading = f"## {day}"
-    entry = f"* **{operation.title()}** `{run_id}`: applied {changed_count} planned knowledge file(s)."
+    entry = (
+        f"* **{operation}** `{run_id}`：已应用 {changed_count} 个计划知识文件。"
+        if content_language == "zh-CN"
+        else f"* **{operation.title()}** `{run_id}`: applied {changed_count} planned knowledge file(s)."
+    )
     if heading in text.splitlines():
         lines = text.splitlines()
         index = lines.index(heading) + 1
@@ -447,7 +473,7 @@ def _prepend_log(log_path: Path, run_id: str, operation: str, changed_count: int
         if lines and lines[0].startswith("# "):
             content = "\n".join([lines[0], "", heading, "", entry, "", *lines[1:]]).rstrip() + "\n"
         else:
-            content = f"# Knowledge Bundle Update Log\n\n{heading}\n\n{entry}\n\n{text.lstrip()}"
+            content = f"# {log_title}\n\n{heading}\n\n{entry}\n\n{text.lstrip()}"
     _atomic_write_text(log_path, content)
 
 
@@ -499,7 +525,13 @@ def apply_run(repo: str | os.PathLike[str], *, run_id: str) -> dict[str, Any]:
                 _atomic_write_bytes(target, staged_path.read_bytes())
 
             index_result = build_indexes(root)
-            _prepend_log(bundle / "log.md", run_id, str(report["operation"]), len(staged))
+            _prepend_log(
+                bundle / "log.md",
+                run_id,
+                str(report["operation"]),
+                len(staged),
+                _content_language(config),
+            )
             applied_set = sorted({*report["write_set"], *index_result["changed"], _relative_posix(bundle / "log.md", root)})
             report["applied_set"] = applied_set
             report["staged_hashes"] = staged_hashes
@@ -544,7 +576,7 @@ def review_run(
     note: str | None = None,
 ) -> dict[str, Any]:
     root = _repository_root(repo)
-    _, _, config = _configured_roots(root)
+    _configured_roots(root)
     report = _load_run(root, run_id)
     if report.get("status") == "REVIEWED" and decision == "approved":
         _check_baseline(root, report.get("baseline_after", {}))
@@ -557,10 +589,7 @@ def review_run(
     raw_report = guard_raw(root)
     if not raw_report["ok"]:
         raise ADWikiError("Raw guard failed before review")
-    _validate_actor(actor)
-    owners = _review_owners(config)
-    if report.get("risk") in {"medium", "high"} and owners and actor not in owners:
-        raise ADWikiError(f"review actor is not a configured owner: {actor}")
+    _validate_human_actor(actor)
     review = {"at": _utc_now(), "by": actor, "decision": decision}
     if note:
         review["note"] = note

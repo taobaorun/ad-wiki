@@ -28,6 +28,7 @@ CONCEPT_DIRECTORIES = (
 )
 
 ALLOWED_STATUS = {"draft", "stable", "deprecated"}
+ALLOWED_CONTENT_LANGUAGES = {"en", "zh-CN"}
 ALLOWED_OPERATIONS = {"init", "ingest", "query", "writeback", "lint", "migrate"}
 ALLOWED_RISKS = {"low", "medium", "high", "prohibited"}
 ALLOWED_STATES = {
@@ -61,6 +62,38 @@ TOP_LEVEL_KEY = re.compile(r"^([A-Za-z_][A-Za-z0-9_-]*):(?:[ \t]*(.*))?$")
 RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 MARKDOWN_LINK = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")
 FOOTNOTE = re.compile(r"\[\^([^\]]+)\]")
+HUMAN_ACTOR = re.compile(r"human:[^\s:]+")
+
+LANGUAGE_TEXT = {
+    "en": {
+        "concepts": "Concepts",
+        "directories": "Directories",
+        "domain_body": (
+            "Record only domain-specific terminology, page granularity, and review rules here.\n"
+            "The installed AD-Wiki Plugin owns the reusable workflow.\n"
+        ),
+        "domain_label": "Domain",
+        "domain_title": "Domain Overlay",
+        "empty_index": "No Concepts in this directory.",
+        "index_hint": "Run the AD-Wiki index builder after adding Concepts.",
+        "index_title": "Knowledge Bundle Index",
+        "log_title": "Knowledge Bundle Update Log",
+    },
+    "zh-CN": {
+        "concepts": "概念",
+        "directories": "目录",
+        "domain_body": (
+            "这里只记录领域术语、页面粒度和评审规则。\n"
+            "可复用工作流由已安装的 AD-Wiki Plugin 提供。\n"
+        ),
+        "domain_label": "领域",
+        "domain_title": "领域配置",
+        "empty_index": "本目录暂无概念。",
+        "index_hint": "添加概念后运行 AD-Wiki 索引构建器。",
+        "index_title": "知识包索引",
+        "log_title": "知识包更新日志",
+    },
+}
 
 
 class ADWikiError(RuntimeError):
@@ -133,9 +166,33 @@ def _write_new_or_equal(path: Path, content: str, created: list[str], root: Path
     created.append(_relative_posix(path, root))
 
 
-def _default_config(domain: str) -> dict[str, Any]:
+def _content_language(config: dict[str, Any]) -> str:
+    value = config.get("content_language", "zh-CN")
+    if not isinstance(value, str) or value not in ALLOWED_CONTENT_LANGUAGES:
+        raise ADWikiError(
+            "content_language must be one of: " + ", ".join(sorted(ALLOWED_CONTENT_LANGUAGES))
+        )
+    return str(value)
+
+
+def _normalize_owners(owners: Iterable[str] | None) -> list[str]:
+    if owners is None:
+        return []
+    if isinstance(owners, (str, bytes)):
+        raise ADWikiError("review owners must be a list of human:<id> values")
+    try:
+        values = list(owners)
+    except TypeError as exc:
+        raise ADWikiError("review owners must be a list of human:<id> values") from exc
+    if not all(isinstance(item, str) and HUMAN_ACTOR.fullmatch(item) for item in values):
+        raise ADWikiError("review owners must be a list of human:<id> values")
+    return sorted(set(values))
+
+
+def _default_config(domain: str, content_language: str, owners: list[str]) -> dict[str, Any]:
     return {
         "bundle_root": "wiki",
+        "content_language": content_language,
         "domain": {
             "concept_types": [
                 "Source Summary",
@@ -157,44 +214,60 @@ def _default_config(domain: str) -> dict[str, Any]:
         },
         "profile_version": PROFILE_VERSION,
         "raw_root": "raw",
-        "review": {"high_risk": "pre_apply", "medium_risk": "post_apply", "owners": []},
+        "review": {"high_risk": "pre_apply", "medium_risk": "post_apply", "owners": owners},
         "search": {"mcp_threshold_pages": 1000, "provider": "builtin"},
     }
 
 
-def _root_index() -> str:
+def _root_index(content_language: str) -> str:
+    labels = LANGUAGE_TEXT[content_language]
     return (
         "---\n"
         f'okf_version: "{OKF_VERSION}"\n'
         "---\n\n"
-        "# Knowledge Bundle Index\n\n"
-        "## Directories\n\n"
-        "_Run the AD-Wiki index builder after adding Concepts._\n"
+        f"# {labels['index_title']}\n\n"
+        f"## {labels['directories']}\n\n"
+        f"_{labels['index_hint']}_\n"
     )
 
 
-def initialize_repository(repo: str | os.PathLike[str], domain: str = "general") -> dict[str, Any]:
+def initialize_repository(
+    repo: str | os.PathLike[str],
+    domain: str = "general",
+    content_language: str = "zh-CN",
+    owners: Iterable[str] | None = None,
+) -> dict[str, Any]:
     root = _repository_root(repo)
-    root.mkdir(parents=True, exist_ok=True)
     if not domain.strip():
         raise ADWikiError("domain must be non-empty")
+    if not isinstance(content_language, str) or content_language not in ALLOWED_CONTENT_LANGUAGES:
+        raise ADWikiError(
+            "content_language must be one of: " + ", ".join(sorted(ALLOWED_CONTENT_LANGUAGES))
+        )
+    normalized_owners = _normalize_owners(owners)
+    root.mkdir(parents=True, exist_ok=True)
 
     created: list[str] = []
-    config_text = json.dumps(_default_config(domain.strip()), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    config_text = json.dumps(
+        _default_config(domain.strip(), content_language, normalized_owners),
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    ) + "\n"
     registry_text = json.dumps({"sources": [], "version": 1}, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    labels = LANGUAGE_TEXT[content_language]
     domain_text = (
-        "# Domain Overlay\n\n"
-        f"Domain: {domain.strip()}\n\n"
-        "Record only domain-specific terminology, page granularity, and review rules here.\n"
-        "The installed AD-Wiki Plugin owns the reusable workflow.\n"
+        f"# {labels['domain_title']}\n\n"
+        f"{labels['domain_label']}: {domain.strip()}\n\n"
+        f"{labels['domain_body']}"
     )
     files = {
         "ad-wiki.yaml": config_text,
         ".ad-wiki/.gitignore": "lock\n",
         ".ad-wiki/domain.md": domain_text,
         ".ad-wiki/source-registry.json": registry_text,
-        "wiki/index.md": _root_index(),
-        "wiki/log.md": "# Knowledge Bundle Update Log\n",
+        "wiki/index.md": _root_index(content_language),
+        "wiki/log.md": f"# {labels['log_title']}\n",
     }
     for relative in [*files, "raw", "wiki", ".ad-wiki"]:
         candidate = root / relative
@@ -222,10 +295,18 @@ def initialize_repository(repo: str | os.PathLike[str], domain: str = "general")
     for relative, content in files.items():
         _write_new_or_equal(root / relative, content, created, root)
 
+    warnings = []
+    if not normalized_owners:
+        warnings.append(
+            "尚未配置 review.owners；高风险事务已禁用，请在 ad-wiki.yaml 中添加 human:<id>。"
+            if content_language == "zh-CN"
+            else "review.owners is empty; high-risk transactions are disabled until ad-wiki.yaml lists a human:<id>."
+        )
     return {
         "created": sorted(created),
         "repository": str(root),
         "status": "created" if created else "unchanged",
+        "warnings": warnings,
     }
 
 
@@ -582,9 +663,14 @@ def _concept_metadata(path: Path) -> dict[str, str]:
     }
 
 
-def _index_content(directory: Path, bundle: Path) -> str:
+def _index_content(directory: Path, bundle: Path, content_language: str) -> str:
+    labels = LANGUAGE_TEXT[content_language]
     root = directory == bundle
-    title = "Knowledge Bundle Index" if root else f"{directory.name.replace('-', ' ').title()} Index"
+    title = labels["index_title"] if root else (
+        f"{directory.name.replace('-', ' ').title()} Index"
+        if content_language == "en"
+        else f"{directory.name} 索引"
+    )
     parts: list[str] = []
     if root:
         parts.append(f'---\nokf_version: "{OKF_VERSION}"\n---\n')
@@ -604,7 +690,7 @@ def _index_content(directory: Path, bundle: Path) -> str:
     )
 
     if concepts:
-        parts.append("## Concepts\n")
+        parts.append(f"## {labels['concepts']}\n")
         for concept in concepts:
             metadata = _concept_metadata(concept)
             target = "/" + concept.relative_to(bundle).as_posix()
@@ -612,13 +698,13 @@ def _index_content(directory: Path, bundle: Path) -> str:
             parts.append(f"* [{metadata['title']}]({target}){suffix}")
         parts.append("")
     if subdirs:
-        parts.append("## Directories\n")
+        parts.append(f"## {labels['directories']}\n")
         for subdir in subdirs:
             target = "/" + subdir.relative_to(bundle).as_posix().rstrip("/") + "/"
             parts.append(f"* [{subdir.name}]({target})")
         parts.append("")
     if not concepts and not subdirs:
-        parts.append("_No Concepts in this directory._\n")
+        parts.append(f"_{labels['empty_index']}_\n")
     return "\n".join(parts).rstrip() + "\n"
 
 
@@ -626,6 +712,7 @@ def build_indexes(repo: str | os.PathLike[str]) -> dict[str, Any]:
     root = _repository_root(repo)
     _, bundle, config = _configured_roots(root)
     _require_supported_profile(config)
+    content_language = _content_language(config)
     root_index = bundle / "index.md"
     if root_index.is_file():
         parsed = _frontmatter(root_index.read_text(encoding="utf-8"))
@@ -647,7 +734,7 @@ def build_indexes(repo: str | os.PathLike[str]) -> dict[str, Any]:
 
     changed: list[str] = []
     for directory in sorted(directories, key=lambda item: item.relative_to(bundle).as_posix()):
-        content = _index_content(directory, bundle)
+        content = _index_content(directory, bundle, content_language)
         path = directory / "index.md"
         if not path.exists() or path.read_text(encoding="utf-8") != content:
             _atomic_write_text(path, content)
@@ -749,8 +836,17 @@ def validate_repository(repo: str | os.PathLike[str], today: date | None = None)
         if ingest_config.get("default_status", "draft") not in ALLOWED_STATUS:
             errors.append(_issue("ADW-E109", "ingest.default_status must be a supported status", "ad-wiki.yaml"))
 
+    content_language = config.get("content_language", "zh-CN")
+    if not isinstance(content_language, str) or content_language not in ALLOWED_CONTENT_LANGUAGES:
+        errors.append(
+            _issue(
+                "ADW-E109",
+                "content_language must be one of: " + ", ".join(sorted(ALLOWED_CONTENT_LANGUAGES)),
+                "ad-wiki.yaml",
+            )
+        )
+
     review_config = config.get("review", {})
-    actor_pattern = re.compile(r"(?:human|process):[^\s:]+|[^\s/:]+/[^\s/]+")
     if not isinstance(review_config, dict):
         errors.append(_issue("ADW-E109", "review configuration must be a mapping", "ad-wiki.yaml"))
     else:
@@ -760,9 +856,9 @@ def validate_repository(repo: str | os.PathLike[str], today: date | None = None)
             errors.append(_issue("ADW-E109", "review.high_risk must be pre_apply", "ad-wiki.yaml"))
         owners = review_config.get("owners", [])
         if not isinstance(owners, list) or not all(
-            isinstance(item, str) and actor_pattern.fullmatch(item) for item in owners
+            isinstance(item, str) and HUMAN_ACTOR.fullmatch(item) for item in owners
         ):
-            errors.append(_issue("ADW-E109", "review.owners must be a list of valid actors", "ad-wiki.yaml"))
+            errors.append(_issue("ADW-E109", "review.owners must be a list of human:<id> values", "ad-wiki.yaml"))
 
     search_config = config.get("search", {})
     if not isinstance(search_config, dict):

@@ -216,6 +216,102 @@ class TransactionTests(RuntimeTestCase):
             approve_run(self.repo, run_id="run-owned", actor="human:alice")["status"],
             "APPROVED",
         )
+        apply_run(self.repo, run_id="run-owned")
+        self.assertEqual(
+            review_run(
+                self.repo,
+                run_id="run-owned",
+                actor="human:bob",
+                decision="approved",
+            )["status"],
+            "REVIEWED",
+        )
+
+    def test_empty_owner_list_blocks_only_high_risk_approval(self) -> None:
+        medium = self.prepare("run-medium-open", risk="medium")
+        medium.write_text(concept_text())
+        self.assertEqual(
+            approve_run(self.repo, run_id="run-medium-open", actor="human:writer")["status"],
+            "APPROVED",
+        )
+
+        high = self.prepare("run-high-ownerless", risk="high", target="wiki/concepts/high.md")
+        high.write_text(concept_text("High Risk"))
+        with self.assertRaisesRegex(ADWikiError, "review.owners"):
+            approve_run(self.repo, run_id="run-high-ownerless")
+
+    def test_owner_allowlist_does_not_restrict_medium_approval_or_review(self) -> None:
+        config_path = self.repo / "ad-wiki.yaml"
+        config = json.loads(config_path.read_text())
+        config["review"]["owners"] = ["human:owner"]
+        config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+        staged = self.prepare("run-medium-reviewer", risk="medium")
+        staged.write_text(concept_text())
+
+        approve_run(self.repo, run_id="run-medium-reviewer", actor="human:writer")
+        apply_run(self.repo, run_id="run-medium-reviewer")
+        reviewed = review_run(
+            self.repo,
+            run_id="run-medium-reviewer",
+            actor="human:reviewer",
+            decision="approved",
+        )
+
+        self.assertEqual(reviewed["status"], "REVIEWED")
+
+    def test_medium_approval_and_all_reviews_require_human_actors(self) -> None:
+        staged = self.prepare("run-human-audit", risk="medium")
+        staged.write_text(concept_text())
+        with self.assertRaisesRegex(ADWikiError, "human:<id>"):
+            approve_run(self.repo, run_id="run-human-audit", actor="process:ad-wiki")
+
+        approve_run(self.repo, run_id="run-human-audit", actor="human:writer")
+        apply_run(self.repo, run_id="run-human-audit")
+        with self.assertRaisesRegex(ADWikiError, "human:<id>"):
+            review_run(
+                self.repo,
+                run_id="run-human-audit",
+                actor="process:ad-wiki",
+                decision="approved",
+            )
+
+    def test_transaction_log_uses_configured_content_language(self) -> None:
+        staged = self.prepare("run-zh-log", risk="low")
+        staged.write_text(concept_text())
+        approve_run(self.repo, run_id="run-zh-log")
+        apply_run(self.repo, run_id="run-zh-log")
+
+        log = (self.repo / "wiki/log.md").read_text()
+        self.assertTrue(log.startswith("# 知识包更新日志"))
+        self.assertIn("已应用 1 个计划知识文件", log)
+
+    def test_english_repository_keeps_deterministic_indexes_and_log_in_english(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory).resolve()
+            initialize_repository(repo, "research", content_language="en")
+            source = repo / "raw/inbox/source.md"
+            source.write_text("English source.\n")
+            register_source(repo, source, "urn:test:english")
+            prepare_run(
+                repo,
+                run_id="run-en-log",
+                operation="ingest",
+                risk="low",
+                inputs=["raw/inbox/source.md"],
+                read_set=["wiki/index.md"],
+                write_set=["wiki/concepts/english.md"],
+            )
+            staged = repo / ".ad-wiki/runs/run-en-log/staged/wiki/concepts/english.md"
+            staged.parent.mkdir(parents=True)
+            staged.write_text(concept_text("English"))
+
+            approve_run(repo, run_id="run-en-log")
+            apply_run(repo, run_id="run-en-log")
+
+            self.assertIn("## Concepts", (repo / "wiki/concepts/index.md").read_text())
+            log = (repo / "wiki/log.md").read_text()
+            self.assertTrue(log.startswith("# Knowledge Bundle Update Log"))
+            self.assertIn("applied 1 planned knowledge file(s)", log)
 
     def test_enforces_supervised_batch_limit_and_run_directory_boundary(self) -> None:
         first = self.register()

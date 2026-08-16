@@ -692,6 +692,7 @@ LLM 负责需要理解与综合的工作；脚本负责可机械验证的工作�
 profile_version: "0.1"
 bundle_root: wiki
 raw_root: raw
+content_language: zh-CN
 
 domain:
   name: architecture-decisions
@@ -727,6 +728,10 @@ search:
 ```
 
 配置只描述差异，不复制通用 Workflow。领域规则若无法用 YAML 表达，再写 `.ad-wiki/domain.md`，例如术语边界、页面粒度和何时需要特定 Reviewer。
+
+`content_language` 当前支持 `zh-CN` 与 `en`，Init 默认写入 `zh-CN`。它约束 Agent 生成的标题、摘要、正文、索引、日志和默认回答，但不翻译 Raw、代码、引用原文、稳定标识或已有路径；旧库缺少该字段时按 `zh-CN` 解释，不自动重写。
+
+`review.owners` 只列出可以事前批准高风险事务的真实 `human:<id>`。空列表不影响低风险和中风险工作，但会禁用高风险批准；中风险仍可由任意具名 human 获得写入授权，并由任意真实 human 完成事后 Review。actor 是审计声明，不是 AD-Wiki 自建认证，真实权限仍由 Git、分支保护、PR Review 和 CODEOWNERS 负责。
 
 ## 十五、搜索与 MCP 演进
 不要因为 Plugin 支持 MCP，就在第一版强制部署搜索服务。

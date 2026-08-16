@@ -21,7 +21,7 @@ Never resolve packaged commands relative to the knowledge repository's current w
 ## Resolve the repository
 
 1. Locate `ad-wiki.yaml` from the current directory or an explicit repository path.
-2. Read `ad-wiki.yaml`, then `wiki/index.md`.
+2. Read `ad-wiki.yaml`, resolve `content_language` (`zh-CN` when absent), then read `wiki/index.md`.
 3. Read `.ad-wiki/domain.md` only when domain-specific interpretation is needed.
 4. Refuse paths that resolve outside the repository root.
 
@@ -36,6 +36,7 @@ If the repository is not initialized and the user asks to create it, use `<plugi
 - Cite claim-level evidence with footnotes keyed to `sources[].id`.
 - Never fabricate `verified`, especially a `human:` verification.
 - Preserve unknown OKF frontmatter fields when editing.
+- Write generated titles, descriptions, prose, Index/Log-facing text, and default answers in the configured `content_language`. Preserve Raw text, code, quotations, proper identifiers, frontmatter keys, and existing paths exactly.
 - Let `apply_run.py` update indexes and prepend the ISO-date log entry; never stage reserved files.
 - Do not commit, push, open a PR, install a Marketplace, delete content, or change permissions without explicit user authority.
 
@@ -45,7 +46,7 @@ Read [OKF Profile](references/okf-profile.md) before writing Concepts. Read [Wor
 
 ### Init
 
-Run `<plugin-root>/scripts/init_bundle.py --repo <repo> --domain <name> --json`, inspect the created paths, then run validation. Do not overwrite existing non-identical files.
+Run `<plugin-root>/scripts/init_bundle.py --repo <repo> --domain <name> --language <language> --json`, inspect the created paths and warnings, then run validation. Use an explicit user-selected `zh-CN` or `en`; otherwise use `zh-CN`. Pass `--owner human:<id>` only for each real high-risk approver already supplied by the user. An empty owner list is valid but leaves high-risk transactions disabled. Do not overwrite existing non-identical files.
 
 ### Ingest
 
@@ -53,6 +54,7 @@ Run `<plugin-root>/scripts/init_bundle.py --repo <repo> --domain <name> --json`,
 2. Run `<plugin-root>/scripts/search_wiki.py --repo <repo> --query <terms> --json`, then read the source and relevant Concepts.
 3. Choose the complete read set, write set, conflicts, and risk. Run `<plugin-root>/scripts/prepare_run.py` before writing content.
 4. Create or update the Source Summary and every affected Concept under the returned staging root, preserving each target's repository-relative path.
+   For `zh-CN`, use the localized structures in `assets/templates/zh-CN/`; for `en`, use the templates in `assets/templates/`. Keep protocol keys and cited source text unchanged.
 5. Show the staged semantic diff. Run `<plugin-root>/scripts/approve_run.py` only from real write authority; never invent a human actor.
 6. Run `<plugin-root>/scripts/apply_run.py`. It owns the lock, drift check, live writes, indexes, log, validation, Raw guard, and rollback.
 7. Summarize the applied diff and pending review. Run `<plugin-root>/scripts/review_run.py` only after the named actor actually accepts it.
@@ -61,7 +63,7 @@ Default to one supervised source per operation. A source summary alone is not a 
 
 ### Query
 
-Run `<plugin-root>/scripts/search_wiki.py`, read only the returned Concepts needed for the answer, and return to Raw only to verify evidence. Return citations and label inference explicitly. Query never creates a run or mutates the repository. Use Writeback as a separate operation when durable value and write authority are both clear.
+Run `<plugin-root>/scripts/search_wiki.py`, read only the returned Concepts needed for the answer, and return to Raw only to verify evidence. Answer in the configured `content_language`, return citations, and label inference explicitly. Query never creates a run or mutates the repository. Use Writeback as a separate operation when durable value and write authority are both clear.
 
 ### Writeback
 
@@ -77,7 +79,7 @@ Run `<plugin-root>/scripts/migrate_bundle.py` to inspect the requested target. I
 
 ## Deterministic commands
 
-- `init_bundle.py`: create a minimal repository structure.
+- `init_bundle.py`: create a minimal repository structure with `content_language` and optional high-risk human owners.
 - `register_source.py`: hash and register immutable sources idempotently.
 - `validate_bundle.py`: validate OKF structure and the AD-Wiki profile.
 - `build_index.py`: regenerate deterministic directory indexes.

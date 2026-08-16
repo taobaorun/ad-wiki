@@ -25,6 +25,8 @@ Product Context: 本文同时记录当前版本的持久产品边界
 - R12 — Codex 与 Claude Code 对同一知识库执行相同操作时必须遵守同一套仓库边界、审批门禁、Raw 不可变、引用和事务规则；acceptance: 双宿主前向测试覆盖 Init、只读 Query 和一次受门禁写入，输出的仓库结构与校验结果符合相同契约；owner/method: engineering，双宿主前向测试；provenance: 本次兼容要求。
 - R13 — 双端 Plugin 使用同一个稳定插件名和发布版本；acceptance: 两个 Plugin Manifest 的 `name` 均为 `ad-wiki`，正式发布时 SemVer 完全一致，版本不一致会阻断打包测试；owner/method: engineering，Manifest contract test；provenance: 团队统一分发与可升级性要求。
 - R14 — AD-Wiki 作为单 Plugin 仓库时，仓库根必须直接作为 Plugin 根，Skill 统一放在可扩展的根级 `skills/`；acceptance: 仓库不存在 `plugins/ad-wiki` 包装层，两个 Marketplace source 均为 `./`，新增并列 Skill 不需要修改 Plugin 根或复制 Runtime；owner/method: engineering，目录与 packaging contract test；provenance: 用户于 2026-08-16 参考真实 Plugin 仓库后确认的发行结构。
+- R15 — `review.owners` 只作为高风险事务的真实 human 事前审批白名单；acceptance: 空 owner 列表不影响低风险或中风险工作流，但高风险 Apply 必须失败并给出可操作提示；非空时只有列出的 `human:<id>` 可以批准高风险事务；中风险仍由任意具名 human 完成事后 Review，不被 owner 白名单限制；owner/actor 身份由现有 Git/PR 权限系统负责，AD-Wiki 不宣称完成认证；owner/method: engineering，状态机、CLI 与策略测试；provenance: 用户于 2026-08-16 接受 owner 推荐语义。
+- R16 — Init 必须持久化团队 Wiki 的内容语言，默认 `zh-CN`，并允许显式选择 `en`；acceptance: 新仓库配置、初始化说明、Index 与 Log 使用所选语言，后续 Skill 生成的标题、摘要、正文和默认回答遵循该语言；Raw、代码、专有标识和引用原文不翻译；旧仓库缺少字段时按 `zh-CN` 解释但不自动重写已有内容；owner/method: engineering，Init、兼容、模板/Skill 与端到端测试；provenance: 用户于 2026-08-16 接受语言推荐并指定默认值 `zh-CN`。
 
 ## In scope
 
@@ -35,6 +37,8 @@ Product Context: 本文同时记录当前版本的持久产品边界
 - builtin repository-local search；
 - Raw Source 注册、哈希和不可变保护；
 - 精确 write set、baseline、审批、锁、回滚、校验、Review、Index 和 Log；
+- 可选初始化 owner、高风险 owner 门禁，以及不依赖 AD-Wiki 身份系统的具名 human 审计记录；
+- 初始化时持久化内容语言，当前支持 `zh-CN` 与 `en`；
 - OKF `0.2` 与 AD-Wiki Profile 的兼容、校验和未来本地迁移；
 - Git Diff、Commit 和 PR 作为团队内容变更的审查与恢复边界。
 
@@ -47,6 +51,7 @@ Product Context: 本文同时记录当前版本的持久产品边界
 - 服务端 Connector、作业队列、批量导入 Coordinator 和自动 PR 服务；
 - Attested Runtime、通用代码执行、数据仓库凭据、Receipt/Verdict；
 - 自动迁移所有团队仓库、自动合并 PR 或修改默认分支；
+- AD-Wiki 自建身份认证、把 actor 字符串宣称为已认证身份、自动翻译 Raw 或批量改写既有 Wiki；
 - 本轮没有明确要求的本地批量导入器。
 
 ## Constraints and confirmed decisions
@@ -59,11 +64,15 @@ Product Context: 本文同时记录当前版本的持久产品边界
 - 当前 Plugin 可以理解 `Attested Computation` 内容类型，但不得暗示具备执行或 Attestation 能力。
 - 规模化平台设计是未来备选，不属于当前版本承诺。
 - 双宿主兼容只承诺原生发现、安装和相同核心工作流；不因此引入 Claude Code 专属 Agent/Hook、Codex App/MCP 或其他宿主专属产品能力。
+- `review.owners` 为空表示尚未授予高风险审批权，不表示知识库不可用；owner 必须是 `human:<id>`，且只限制高风险事前审批。
+- 中风险事务仍需要明确写入授权和真实 `human:<id>` 事后 Review；配置 owner 不把日常 Ingest Review 集中到 owner。
+- 内容语言默认 `zh-CN`；它约束 Agent 生成的知识表达，不改变 Raw、代码、引用、稳定标识或已有文件路径。
 
 ## Delegated engineering defaults and boundaries
 
 - 工程可以在不改变行为契约的前提下选择本地、可逆的文件布局、Python helper、测试 fixture 和性能优化。
 - 工程可以加强当前仓库内的路径、事务、Lint、索引和安全校验，只要不引入远程依赖或新的用户可见流程。
+- 工程可以选择最小的配置字段和 CLI 参数表达 owner 与内容语言，只要保持向后兼容、错误可操作，且不把 actor 字符串提升为认证机制。
 - 任何远程服务、MCP Server、App、组织身份、Connector、后台 Worker、跨仓库能力或外部计算权限都超出默认授权，必须获得新的 Product Contract。
 - 本地批量导入若未来提出，必须仍以一个目标仓库、每来源可追溯、Raw 不可变和现有事务门禁为基础，并单独确认其用户体验和自动化等级。
 

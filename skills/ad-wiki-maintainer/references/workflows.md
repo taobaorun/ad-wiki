@@ -53,10 +53,14 @@ Do not include `index.md` or `log.md` in the staged write set. Do not retry a `F
 Run:
 
 ```bash
-python <plugin>/scripts/init_bundle.py --repo <repo> --domain <domain> --json
+python <plugin>/scripts/init_bundle.py \
+  --repo <repo> --domain <domain> --language zh-CN \
+  --owner human:<real-high-risk-approver> --json
 ```
 
-Confirm that `raw/`, `wiki/`, `.ad-wiki/`, `ad-wiki.yaml`, root `index.md`, and `log.md` exist. The command is idempotent only while generated files remain identical; it refuses to overwrite changed files.
+`--language` accepts `zh-CN` and `en` and defaults to `zh-CN`. Repeat `--owner` only for real high-risk approvers; omit it when none is known. Empty owners do not fail Init or block low/medium operations, but the result warns that high-risk approval remains disabled.
+
+Confirm that `raw/`, `wiki/`, `.ad-wiki/`, `ad-wiki.yaml`, root `index.md`, and `log.md` exist. The command is idempotent only while generated files remain identical; it refuses to overwrite changed files. Read `content_language` before generating knowledge: use it for titles, descriptions, prose, Index/Log text, and default answers, while preserving Raw, code, quotations, identifiers, frontmatter keys, and paths. A legacy repository without the field behaves as `zh-CN` and is not rewritten merely to add the field.
 
 ## Ingest
 

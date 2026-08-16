@@ -28,4 +28,4 @@ After migration:
 
 Plugin upgrades never trigger migration automatically. Each knowledge repository owner chooses when to migrate.
 
-The `0.4.0` Plugin intentionally keeps AD-Wiki Profile `0.1`. Its migration command returns `status: current` for Profile `0.1` and refuses every unregistered path. A future release must add and test an exact source-to-target transform before advertising that migration.
+The `1.0.0` Plugin intentionally keeps AD-Wiki Profile `0.1`. Its migration command returns `status: current` for Profile `0.1` and refuses every unregistered path. A future release must add and test an exact source-to-target transform before advertising that migration.

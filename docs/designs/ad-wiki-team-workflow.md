@@ -222,7 +222,7 @@ sources:
     author: human:karpathy
     last_modified: 2026-04-04
 generated:
-  by: ad-wiki/0.4.0
+  by: ad-wiki/1.0.0
   at: 2026-08-15T19:00:00+08:00
 status: draft
 stale_after: 2027-02-15
@@ -347,7 +347,7 @@ ad-wiki/                              # 仓库根即唯一 Plugin 根
 ```json
 {
   "name": "ad-wiki",
-  "version": "0.4.0",
+  "version": "1.0.0",
   "description": "Query and maintain independent team knowledge repositories as continuously compiled OKF bundles.",
   "author": {
     "name": "AD Wiki Team"
@@ -377,7 +377,7 @@ ad-wiki/                              # 仓库根即唯一 Plugin 根
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "ad-wiki",
   "displayName": "AD Wiki",
-  "version": "0.4.0",
+  "version": "1.0.0",
   "description": "Query and maintain independent team knowledge repositories as continuously compiled OKF bundles.",
   "author": {
     "name": "AD Wiki Team"
@@ -632,7 +632,7 @@ DISCOVERED
 {
   "run_id": "run-20260815-001",
   "operation": "ingest",
-  "plugin_version": "0.4.0",
+  "plugin_version": "1.0.0",
   "profile_version": "0.1",
   "inputs": ["raw/sources/karpathy-llm-wiki.md"],
   "source_hashes": {"raw/sources/karpathy-llm-wiki.md": "sha256:..."},
@@ -798,7 +798,7 @@ Raw Source 是不可信数据。来源中出现“忽略规则”“执行命令
 
 ## 十八、团队发布与版本治理
 ### 1. 版本分层
-+ Plugin 使用 SemVer，例如当前独立 Query Skill 版 `0.4.0`；
++ Plugin 使用 SemVer，例如当前首个稳定团队版 `1.0.0`；
 + AD-Wiki Profile 单独版本化，例如 `profile_version: "0.1"`；
 + OKF 版本写在 Bundle 根 `index.md`，当前为 `0.2`；
 + 三者不能混成一个版本号。

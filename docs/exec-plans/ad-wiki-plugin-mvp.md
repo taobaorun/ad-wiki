@@ -6,7 +6,7 @@ Commit policy / authority: none; the user authorized scoped working-tree edits, 
 
 ## Implementation decisions
 
-- Build a repo-local team Marketplace at `.agents/plugins/marketplace.json` and the plugin at `plugins/ad-wiki/`.
+- Build a repo-local team Marketplace at `.agents/plugins/marketplace.json`; the repository root is the single Plugin root and exposes a root-level, extensible `skills/` directory.
 - Use the official plugin and skill scaffolders before customization.
 - Package one `ad-wiki-maintainer` Skill plus deterministic Python 3 standard-library scripts.
 - Keep the MVP dependency-free. Validate the YAML subset emitted by AD-Wiki templates and the OKF structural/profile invariants without claiming support for every YAML feature.
@@ -38,7 +38,7 @@ None. The implementation follows the accepted Phase 1 scope from the linked desi
 
 - Requirements: R1, R2
 - Dependencies and accepted-design pointers: accepted Technical Design sections 3, 7, 8, and 9; official plugin-creator and skill-creator contracts
-- Affected modules and mutation: `.agents/plugins/marketplace.json`, `plugins/ad-wiki/.codex-plugin/plugin.json`, `plugins/ad-wiki/skills/ad-wiki-maintainer/`, plugin-level scripts/assets directories
+- Affected modules and mutation: `.agents/plugins/marketplace.json`, `.codex-plugin/plugin.json`, `skills/ad-wiki-maintainer/`, root-level scripts/assets directories
 - Entry / exit conditions: enter with an empty repository except user-owned hidden directories; exit with scaffolded paths, real metadata, no TODO placeholders, and no MCP/App declarations
 - Focused verification: official `validate_plugin.py`; official `quick_validate.py`; JSON parsing and path checks
 - Recovery checkpoint: remove only scaffold files created by U1 if customization cannot be validated; preserve pre-existing `.agents/` and `.claude/`
@@ -47,7 +47,7 @@ None. The implementation follows the accepted Phase 1 scope from the linked desi
 
 - Requirements: R3-R8
 - Dependencies and accepted-design pointers: accepted Technical Design sections 5, 6, 10-14, and 17
-- Affected modules and mutation: `plugins/ad-wiki/scripts/ad_wiki/`, six command entrypoints, `plugins/ad-wiki/tests/`
+- Affected modules and mutation: `scripts/ad_wiki/`, six command entrypoints, `tests/`
 - Entry / exit conditions: enter with a valid plugin shell; exit when init, source registry, validation, index generation, raw guard, and run reports behave through public CLIs
 - Focused verification: write failing `unittest` cases first for each behavior slice, implement to green, then run the full script test suite
 - Recovery checkpoint: each operation is independently testable and may be reverted without changing the distribution boundary

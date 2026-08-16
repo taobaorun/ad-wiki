@@ -4,17 +4,17 @@ Design identity: `ad-wiki-dual-host-plugin-v0.3-accepted`
 
 Product Contract: `docs/product-specs/ad-wiki-repository-local-scope.md`
 
-Requirements covered: R1-R8, R10-R13
+Requirements covered: R1-R8, R10-R14
 
-Authority: 用户于 2026-08-16 提出双端兼容要求，并通过显式调用 `ad-lfg` 接受本设计进入端到端实施
+Authority: 用户于 2026-08-16 提出双端兼容要求，通过显式调用 `ad-lfg` 接受本设计进入端到端实施，并在参考真实 Plugin 仓库后确认采用单 Plugin 根与根级 `skills/` 布局
 
 ## 1. 决策摘要
 
 AD-Wiki 采用“**双清单、单核心**”结构：
 
 - Codex 与 Claude Code 各自拥有原生 Plugin Manifest 和 Marketplace Catalog；
-- 两个 Marketplace 条目都指向同一个 `plugins/ad-wiki/`；
-- 两个宿主共同加载唯一的 `skills/ad-wiki-maintainer/SKILL.md`，并共同使用同一套 references、templates 和 Python Runtime；
+- AD-Wiki 仓库根就是唯一 Plugin 根，两个 Marketplace 条目都以 `./` 指向它；
+- 两个宿主共同加载根级 `skills/`；当前包含一个 `ad-wiki-maintainer`，以后可以新增 Skill，并共同使用同一套 references、templates 和 Python Runtime；
 - 宿主元数据不承载 Wiki 维护逻辑，不复制第二套提示词；
 - 本功能以 Plugin `0.3.0` 发布，不改变 OKF `0.2`、AD-Wiki Profile `0.1` 或任何团队 Wiki 数据；
 - 不增加 MCP、App、Hook、Agent、服务端、身份系统或跨仓库能力。
@@ -23,15 +23,17 @@ AD-Wiki 采用“**双清单、单核心**”结构：
 
 ## 2. 当前行为、约束与证据
 
-当前发行物只有 Codex 入口：
+迁移前的 `0.2.0` 发行物只有 Codex 入口：
 
 - `.agents/plugins/marketplace.json` 提供 Codex Marketplace；
 - `plugins/ad-wiki/.codex-plugin/plugin.json` 提供 Codex Plugin 元数据；
-- `plugins/ad-wiki/skills/ad-wiki-maintainer/` 与 `plugins/ad-wiki/scripts/` 已经位于 Plugin 根目录内；
+- `plugins/ad-wiki/skills/ad-wiki-maintainer/` 与 `plugins/ad-wiki/scripts/` 位于嵌套 Plugin 根目录内；
 - 当前 Plugin 是 `0.2.0`，没有 MCP、App 或 Hook；
 - 确定性 Runtime 与知识仓库解耦，所有命令都显式接收 `--repo`。
 
 Claude Code 的原生布局同样从 Plugin 根目录发现 `skills/`，但要求自己的 `.claude-plugin/plugin.json`；团队 Marketplace 位于发行仓库根部的 `.claude-plugin/marketplace.json`。Marketplace 安装后，Claude Code 会把整个 Plugin 目录复制到本地缓存，所以 Runtime 不得引用 Plugin 根目录之外的文件。
+
+真实发行物验证表明，单 Plugin 仓库可以让仓库根同时承担发行仓库和 Plugin 根：`mattpocock-skills` 的 Claude Marketplace 使用 `"source": "./"`；已安装的 Compound Engineering 与 Agent Skills Codex Plugin 也使用根级 Manifest、`skills/` 和 `"path": "./"`。因此 `plugins/<name>` 是多 Plugin Marketplace 的组织约定，不是本项目必须承担的协议层。
 
 官方依据：
 
@@ -52,26 +54,23 @@ Claude Code 的原生布局同样从 Plugin 根目录发现 `skills/`，但要�
 ## 3. 结构与所有权
 
 ```text
-ad-wiki-distribution/
+ad-wiki/                              # 仓库根即唯一 Plugin 根
 ├── .agents/
 │   └── plugins/
 │       └── marketplace.json           # Codex Catalog Adapter
 ├── .claude-plugin/
-│   └── marketplace.json               # Claude Code Catalog Adapter
-└── plugins/
-    └── ad-wiki/                        # 唯一 Plugin 根目录
-        ├── .codex-plugin/
-        │   └── plugin.json             # Codex Manifest Adapter
-        ├── .claude-plugin/
-        │   └── plugin.json             # Claude Code Manifest Adapter
-        ├── skills/
-        │   └── ad-wiki-maintainer/
-        │       ├── SKILL.md             # canonical 行为入口
-        │       ├── agents/openai.yaml   # Codex 展示元数据；不改变核心行为
-        │       └── references/          # canonical 协议与策略
-        ├── scripts/                     # canonical 确定性 Runtime
-        ├── examples/
-        └── tests/
+│   ├── marketplace.json               # Claude Code Catalog Adapter
+│   └── plugin.json                    # Claude Code Manifest Adapter
+├── .codex-plugin/
+│   └── plugin.json                    # Codex Manifest Adapter
+├── skills/                            # canonical、可扩展的 Skill 集合
+│   └── ad-wiki-maintainer/
+│       ├── SKILL.md                   # 当前 Wiki 维护入口
+│       ├── agents/openai.yaml         # Codex 展示元数据；不改变核心行为
+│       └── references/                # canonical 协议与策略
+├── scripts/                           # canonical 确定性 Runtime
+├── examples/
+└── tests/
 ```
 
 所有权边界：
@@ -80,7 +79,7 @@ ad-wiki-distribution/
 | --- | --- | --- |
 | Codex Adapter | Codex Manifest、展示字段、安装策略和 Marketplace source | Wiki 操作流程、领域规则、Runtime 分叉 |
 | Claude Adapter | Claude Manifest、展示字段、原生 namespace 和 Marketplace source | 第二份 Skill、Claude 专属业务语义 |
-| Shared Skill | 操作路由、读取顺序、不变量、权限停止点 | 宿主安装状态、团队知识内容 |
+| Shared Skills | 根级 `skills/` 下的操作路由、读取顺序、不变量、权限停止点 | 宿主安装状态、团队知识内容 |
 | Shared Runtime | 路径隔离、Raw Guard、事务、索引、校验、搜索 | LLM 语义判断和宿主配置写入 |
 | Team Wiki | Raw、Concept、Index、Log、领域配置和 Git 历史 | Plugin 提示词、Plugin Runtime |
 
@@ -90,10 +89,11 @@ flowchart LR
     A[Claude Code] --> AM[.claude-plugin Marketplace]
     CM --> CP[.codex-plugin Manifest]
     AM --> AP[.claude-plugin Manifest]
-    CP --> CORE[同一个 plugins/ad-wiki]
+    CP --> CORE[仓库根 / 唯一 Plugin root]
     AP --> CORE
-    CORE --> SKILL[唯一 Maintainer Skill]
-    SKILL --> RT[唯一确定性 Runtime]
+    CORE --> SKILLS[根级 skills/]
+    SKILLS --> SKILL[ad-wiki-maintainer]
+    SKILL --> RT[共享确定性 Runtime]
     RT --> REPO[用户显式选择的单个团队 Wiki 仓库]
 ```
 
@@ -121,8 +121,8 @@ Codex Manifest 保留 `interface` 块，用于显示名、能力和 starter prom
 
 | 宿主 | Catalog 文件 | Plugin source 表达 |
 | --- | --- | --- |
-| Codex | `.agents/plugins/marketplace.json` | `{ "source": "local", "path": "./plugins/ad-wiki" }` |
-| Claude Code | `.claude-plugin/marketplace.json` | `"./plugins/ad-wiki"` |
+| Codex | `.agents/plugins/marketplace.json` | `{ "source": "local", "path": "./" }` |
+| Claude Code | `.claude-plugin/marketplace.json` | `"./"` |
 
 Claude Marketplace 条目不重复声明版本；`.claude-plugin/plugin.json` 是 Claude 版本权威。Codex Marketplace 继续持有 `AVAILABLE` / `ON_INSTALL` 策略，保持当前团队主动安装方式。
 
@@ -179,7 +179,7 @@ sequenceDiagram
 
 ## 8. 兼容、升级与恢复
 
-- 现有 Codex 用户从 `0.2.0` 更新到 `0.3.0`；原 Codex Marketplace 路径、Plugin 名和 Skill 名不变。
+- 现有 Codex 用户从 `0.2.0` 更新到 `0.3.0`；Plugin 名和 Skill 名不变，Marketplace source 从嵌套目录切换为仓库根，升级时重新安装即可，团队 Wiki 无迁移。
 - Claude Code 用户首次添加同一发行仓库并安装 `ad-wiki@ad-wiki-team`。
 - Wiki 的 OKF/Profile 版本不变，不执行内容迁移，不修改 `ad-wiki.yaml`。
 - 一个宿主的 Manifest 或 Catalog 校验失败时，只阻止该发行候选，不回退为复制 Skill 或修改 Wiki。
@@ -202,14 +202,15 @@ sequenceDiagram
 
 ### 静态与打包验证
 
-1. Codex 官方 `validate_plugin.py plugins/ad-wiki` 通过。
-2. Claude Code `claude plugin validate plugins/ad-wiki --strict` 通过。
-3. Claude Code `claude plugin validate . --strict` 验证 Marketplace 通过。
+1. Codex 官方 `validate_plugin.py .` 通过。
+2. Claude Code `claude plugin validate . --strict` 通过根级 Plugin 与 Marketplace 校验。
+3. 两个 Marketplace 的 `./` 均解析回仓库根。
 4. Agent Skill 官方 `quick_validate.py` 验证 canonical Skill 通过。
 5. Packaging tests 验证：
    - 两个 Manifest 的稳定 `name`、正式 `version`、author 和 skills path；
-   - 两个 Marketplace 都解析到 `plugins/ad-wiki/`；
-   - 仓库内只有一个 `ad-wiki-maintainer/SKILL.md` 和一套 Runtime；
+   - 两个 Marketplace 都解析到仓库根；
+   - 仓库不存在多余的 `plugins/` 容器，根级 `skills/` 可以容纳多个 Skill；
+   - `ad-wiki-maintainer/SKILL.md` 与 Runtime 均只有一个 canonical 实现；
    - 没有声明 MCP/App/Hook/Agent 等延期能力；
    - 不存在正式发行 cachebuster。
 
@@ -240,6 +241,10 @@ sequenceDiagram
 ### 方案 C：只发布 Agent Skill，不提供原生 Plugin Marketplace
 
 拒绝。核心 Skill 可能可读，但不能满足团队通过两个宿主各自原生 Plugin 体系进行发现、安装、版本管理和更新的要求。
+
+### 方案 D：保留 `plugins/ad-wiki/` 多 Plugin 容器
+
+拒绝。该目录适合一个 Marketplace 仓库托管多个 Plugin；AD-Wiki 仓库只发布一个 Plugin。真实的单 Plugin 与双宿主发行物均证明 Marketplace 可以用 `./` 指向仓库根。保留这一层会增加浏览和维护噪音，却不提供当前需要的隔离能力。
 
 ## 12. 风险
 

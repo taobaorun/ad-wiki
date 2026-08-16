@@ -42,7 +42,7 @@ class PackagingTests(unittest.TestCase):
         self.assertNotIn("+", claude["version"])
 
     def test_dual_host_marketplaces_resolve_the_same_plugin_root(self) -> None:
-        distribution_root = PLUGIN_ROOT.parents[1]
+        distribution_root = PLUGIN_ROOT
         codex = json.loads((distribution_root / ".agents/plugins/marketplace.json").read_text())
         claude = json.loads((distribution_root / ".claude-plugin/marketplace.json").read_text())
 
@@ -55,8 +55,8 @@ class PackagingTests(unittest.TestCase):
         claude_entry = claude["plugins"][0]
         self.assertEqual(codex_entry["name"], "ad-wiki")
         self.assertEqual(claude_entry["name"], "ad-wiki")
-        self.assertEqual(codex_entry["source"]["path"], "./plugins/ad-wiki")
-        self.assertEqual(claude_entry["source"], "./plugins/ad-wiki")
+        self.assertEqual(codex_entry["source"]["path"], "./")
+        self.assertEqual(claude_entry["source"], "./")
         self.assertEqual(
             codex_entry["policy"],
             {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
@@ -68,9 +68,14 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(codex_root, PLUGIN_ROOT)
         self.assertEqual(claude_root, PLUGIN_ROOT)
 
-    def test_plugin_has_one_canonical_skill_and_runtime(self) -> None:
-        skills = list(PLUGIN_ROOT.rglob("SKILL.md"))
-        self.assertEqual(skills, [SKILL_ROOT / "SKILL.md"])
+    def test_plugin_root_is_flat_and_has_one_maintainer_core(self) -> None:
+        self.assertFalse((PLUGIN_ROOT / "plugins").exists())
+        self.assertTrue((PLUGIN_ROOT / "skills").is_dir())
+        self.assertTrue((SKILL_ROOT / "SKILL.md").is_file())
+        self.assertEqual(
+            list(PLUGIN_ROOT.rglob("skills/ad-wiki-maintainer/SKILL.md")),
+            [SKILL_ROOT / "SKILL.md"],
+        )
         self.assertEqual(len(list(PLUGIN_ROOT.rglob("scripts/ad_wiki/core.py"))), 1)
 
     def test_skill_has_no_placeholders_and_declares_progressive_resources(self) -> None:

@@ -20,16 +20,17 @@ Product Context: 本文同时记录当前版本的持久产品边界
 - R7 — 当前版本不提供服务端批量导入、Connector 调度、中央队列或跨仓库 Batch；acceptance: 没有服务端 Worker、Connector 凭据或中央 Batch 状态；owner/method: engineering，代码与发行物检查；provenance: 用户于 2026-08-16 的明确排除。
 - R8 — 当前版本不提供 Attested Runtime；acceptance: 可以读取和校验 `Attested Computation` Concept，但不存在 Executor、Attester、Receipt Store 或计算类 MCP Tool；owner/method: engineering，Profile 与发行物测试；provenance: 用户确认的 DR-001。
 - R9 — 尚未实现的中央平台设计只能作为未来研究材料，不能为实现、权限、部署或依赖扩张提供当前授权；acceptance: 当前 ImplementationPlan 不引用中央平台能力作为交付要求；owner/method: product/design owner，文档审查；provenance: 用户于 2026-08-16 的产品定位确认。
-- R10 — 同一个 AD-Wiki 发行仓库必须能被 Codex 和 Claude Code 各自的原生 Plugin/Marketplace 机制发现和安装；acceptance: 两端官方校验器通过，两个 Marketplace 都解析到同一个 `plugins/ad-wiki/` 根目录，并在隔离环境完成发现与安装冒烟测试；owner/method: engineering，自动化与 CLI 验证；provenance: 用户于 2026-08-16 提出的双端兼容要求。
+- R10 — 同一个 AD-Wiki 发行仓库必须能被 Codex 和 Claude Code 各自的原生 Plugin/Marketplace 机制发现和安装；acceptance: 仓库根就是唯一 Plugin 根，两端官方校验器通过，两个 Marketplace 都以 `./` 解析到该根目录，并在隔离环境完成发现与安装冒烟测试；owner/method: engineering，自动化与 CLI 验证；provenance: 用户于 2026-08-16 提出的双端兼容要求及单 Plugin 仓库扁平化确认。
 - R11 — 双端兼容不得复制两套维护提示词或 Runtime；acceptance: 仓库只有一个 canonical `ad-wiki-maintainer/SKILL.md`、一套 references 和一套确定性脚本，宿主差异仅存在于薄 Manifest、Marketplace 元数据和必要的路径解析说明；owner/method: engineering，发行物检查；provenance: 既有“知识库只保存内容与少量领域配置”原则及本次双端分发要求。
 - R12 — Codex 与 Claude Code 对同一知识库执行相同操作时必须遵守同一套仓库边界、审批门禁、Raw 不可变、引用和事务规则；acceptance: 双宿主前向测试覆盖 Init、只读 Query 和一次受门禁写入，输出的仓库结构与校验结果符合相同契约；owner/method: engineering，双宿主前向测试；provenance: 本次兼容要求。
 - R13 — 双端 Plugin 使用同一个稳定插件名和发布版本；acceptance: 两个 Plugin Manifest 的 `name` 均为 `ad-wiki`，正式发布时 SemVer 完全一致，版本不一致会阻断打包测试；owner/method: engineering，Manifest contract test；provenance: 团队统一分发与可升级性要求。
+- R14 — AD-Wiki 作为单 Plugin 仓库时，仓库根必须直接作为 Plugin 根，Skill 统一放在可扩展的根级 `skills/`；acceptance: 仓库不存在 `plugins/ad-wiki` 包装层，两个 Marketplace source 均为 `./`，新增并列 Skill 不需要修改 Plugin 根或复制 Runtime；owner/method: engineering，目录与 packaging contract test；provenance: 用户于 2026-08-16 参考真实 Plugin 仓库后确认的发行结构。
 
 ## In scope
 
 - 团队统一分发、同时支持 Codex 与 Claude Code 原生安装的 AD-Wiki Plugin；
 - 两个宿主各自的薄 Plugin Manifest 和 Marketplace Catalog；
-- `ad-wiki-maintainer` Skill 和少量仓库领域配置；
+- 根级、可扩展的 `skills/` 集合；当前包含 `ad-wiki-maintainer` Skill 和少量仓库领域配置；
 - 单仓库 Init、Ingest、Query、Writeback、Lint、Migrate；
 - builtin repository-local search；
 - Raw Source 注册、哈希和不可变保护；
@@ -52,7 +53,7 @@ Product Context: 本文同时记录当前版本的持久产品边界
 
 - Markdown/OKF Bundle 和 Git 始终是知识真源；索引或工具输出不能替代它们。
 - 每个知识库独立保存内容和少量领域配置，不复制整套提示词。
-- 双宿主共享一个 Plugin 根目录和一份 canonical Skill/Runtime；宿主 Manifest 不承载维护流程正文。
+- 仓库根就是双宿主共享的唯一 Plugin 根；所有 Skill 位于根级 `skills/`，当前包含 `ad-wiki-maintainer`，未来可以继续新增 Skill，而宿主 Manifest 不承载维护流程正文。
 - Plugin 不保存具体团队知识、访问令牌或组织权限数据。
 - 本地搜索故障不能影响人直接读取 Markdown。
 - 当前 Plugin 可以理解 `Attested Computation` 内容类型，但不得暗示具备执行或 Attestation 能力。

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "ad-wiki-team",
+  "description": "Repository-local AD Wiki workflows for teams.",
+  "owner": {
+    "name": "AD Wiki Team"
+  },
+  "plugins": [
+    {
+      "name": "ad-wiki",
+      "source": "./plugins/ad-wiki",
+      "description": "Maintain independent team knowledge repositories as continuously compiled OKF bundles.",
+      "category": "productivity"
+    }
+  ]
+}

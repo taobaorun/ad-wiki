@@ -6,7 +6,7 @@
 AD-Wiki 应采用 **Plugin-first、Skill-centered、Bundle-independent** 的架构：
 
 + 团队通过统一 Marketplace 分发一个 `ad-wiki` Plugin；
-+ Plugin 内嵌 `ad-wiki-maintainer` Skill、确定性校验脚本和页面模板；
++ Plugin 内嵌只读 `ad-wiki-query` 与写入维护 `ad-wiki-maintainer` 两个 Skill、确定性脚本和页面模板；
 + 每个业务知识库仍是独立 Git 仓库或独立目录，拥有自己的权限、来源、内容、历史和少量领域配置；
 + Plugin 不保存任何团队知识，只操作用户当前明确打开的知识库；
 + Wiki 内容以 OKF v0.2 Knowledge Bundle 落盘，因此即使脱离 Plugin，仍可被人、普通脚本、其他 Agent、搜索引擎和图谱工具读取。
@@ -19,7 +19,8 @@ AD-Wiki 应采用 **Plugin-first、Skill-centered、Bundle-independent** 的架�
 ```latex
 团队 Marketplace
 └── ad-wiki Plugin（共享控制面）
-    ├── ad-wiki-maintainer Skill
+    ├── ad-wiki-query Skill（只读问答）
+    ├── ad-wiki-maintainer Skill（知识维护）
     ├── 校验、哈希、索引与 Diff Guard
     ├── OKF Profile 与页面模板
     └── 可选 Search MCP / 管理 App
@@ -86,7 +87,7 @@ AD-Wiki 不是重新发明一种 Markdown 格式，而是一个 **有明确质�
 
 + 操作流程与决策规则；
 + 默认 OKF Profile；
-+ Ingest、Query、Writeback、Lint 的 Skill 指令；
++ Query 的只读回答契约，以及 Ingest、Writeback、Lint 的维护指令；
 + 来源哈希、Frontmatter 校验、链接检查、索引生成等确定性脚本；
 + Source、Entity、Concept、Synthesis 等模板；
 + 风险分级和人工审批规则；
@@ -195,7 +196,7 @@ knowledge-repo/
 2. `raw/` 与 `wiki/` 物理分离。人或受信任采集器可以新增来源，但 Maintainer 不得修改或删除已登记来源。
 3. 原始来源位于 Bundle 外部时，`sources[].resource` 可以使用 OKF 允许的相对路径；需要单独分发 Wiki 时，可把必要证据镜像为 `wiki/references/` 下的资源。
 4. `.ad-wiki/runs/` 位于 Bundle 外部，避免把运行计划和 Receipt 混入知识内容。
-5. `AGENTS.md` 不是必需副本；若仓库需要自动触发，只保留简短委托：知识操作使用已安装的 `$ad-wiki-maintainer`，配置读取 `ad-wiki.yaml`。
+5. `AGENTS.md` 不是必需副本；若仓库需要自动触发，只保留简短委托：只读问答使用已安装的 `$ad-wiki-query`，知识维护使用 `$ad-wiki-maintainer`，配置读取 `ad-wiki.yaml`。
 
 ## 六、AD-Wiki 的 OKF Profile
 OKF 本身刻意宽松。AD-Wiki 作为 Producer 可以制定更严格的写入规范，但不能把自己的严格规则冒充 OKF 的通用一致性要求。
@@ -221,7 +222,7 @@ sources:
     author: human:karpathy
     last_modified: 2026-04-04
 generated:
-  by: ad-wiki/0.3.0
+  by: ad-wiki/0.4.0
   at: 2026-08-15T19:00:00+08:00
 status: draft
 stale_after: 2027-02-15
@@ -299,6 +300,10 @@ ad-wiki/                              # 仓库根即唯一 Plugin 根
 ├── .codex-plugin/
 │   └── plugin.json                   # Codex Manifest
 ├── skills/                           # 可扩展的 canonical Skill 集合
+│   ├── ad-wiki-query/
+│   │   ├── SKILL.md
+│   │   ├── agents/openai.yaml
+│   │   └── references/query-contract.md
 │   └── ad-wiki-maintainer/
 │       ├── SKILL.md
 │       ├── agents/
@@ -319,7 +324,8 @@ ad-wiki/                              # 仓库根即唯一 Plugin 根
 │   ├── write_run_report.py
 │   ├── prepare_run.py / approve_run.py
 │   ├── apply_run.py / review_run.py
-│   └── search_wiki.py / migrate_bundle.py
+│   ├── search_wiki.py / build_query_context.py
+│   └── migrate_bundle.py
 └── tests/
 ```
 
@@ -330,7 +336,7 @@ ad-wiki/                              # 仓库根即唯一 Plugin 根
 + 重复且易错的操作交给脚本，不要求模型每次重写；
 + 模板作为 Skill Assets 复用；
 + Codex 与 Claude Code 只维护各自的薄 Manifest/Marketplace，共享根级 `skills/`、references、templates 和 Runtime；
-+ 仓库根就是 Plugin 根；`skills/` 当前只有 `ad-wiki-maintainer`，但允许后续增加独立 Skill；
++ 仓库根就是 Plugin 根；`skills/` 当前包含 `ad-wiki-query` 和 `ad-wiki-maintainer`，并允许后续增加独立 Skill；
 + 不创建冗余 README、Quick Reference 或重复规范；
 + 当前版本不包含 MCP，避免为仓库本地 Wiki 构建引入远程服务。
 
@@ -341,21 +347,22 @@ ad-wiki/                              # 仓库根即唯一 Plugin 根
 ```json
 {
   "name": "ad-wiki",
-  "version": "0.3.0",
-  "description": "Maintain independent team knowledge bases as continuously compiled OKF bundles.",
+  "version": "0.4.0",
+  "description": "Query and maintain independent team knowledge repositories as continuously compiled OKF bundles.",
   "author": {
     "name": "AD Wiki Team"
   },
   "skills": "./skills/",
   "interface": {
     "displayName": "AD Wiki",
-    "shortDescription": "持续编译、校验和维护团队 OKF 知识库",
-    "longDescription": "将原始资料增量编译为可追溯、可审查、可持续维护的 OKF Knowledge Bundle。",
+    "shortDescription": "只读查询并持续编译、校验和维护团队 OKF 知识库",
+    "longDescription": "查询已编译知识，并将原始资料增量编译为可追溯、可审查、可持续维护的 OKF Knowledge Bundle。",
     "developerName": "AD Wiki Team",
     "category": "Productivity",
-    "capabilities": ["Interactive", "Write"],
+    "capabilities": ["Interactive", "Read", "Write"],
     "defaultPrompt": [
       "初始化当前仓库为 AD Wiki 知识库。",
+      "只读查询当前 AD Wiki，并返回带来源的答案。",
       "摄入 raw/inbox 中的新来源并生成可审查变更。",
       "巡检当前 Wiki，列出冲突、过期内容和缺失引用。"
     ]
@@ -370,8 +377,8 @@ ad-wiki/                              # 仓库根即唯一 Plugin 根
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "ad-wiki",
   "displayName": "AD Wiki",
-  "version": "0.3.0",
-  "description": "Maintain independent team knowledge repositories as continuously compiled OKF bundles.",
+  "version": "0.4.0",
+  "description": "Query and maintain independent team knowledge repositories as continuously compiled OKF bundles.",
   "author": {
     "name": "AD Wiki Team"
   },
@@ -379,7 +386,7 @@ ad-wiki/                              # 仓库根即唯一 Plugin 根
 }
 ```
 
-两端 Manifest 的正式 `name` 与 `version` 必须一致。Codex 的 `interface` 和 Claude Code 的顶层 `displayName` 属于薄宿主元数据，维护流程只存在于共同的 `skills/ad-wiki-maintainer/SKILL.md`。当前版本不声明 `mcpServers`、`apps`、`hooks`、`agents` 或其他未实现能力。
+两端 Manifest 的正式 `name` 与 `version` 必须一致。Codex 的 `interface` 和 Claude Code 的顶层 `displayName` 属于薄宿主元数据；只读问答与写入维护流程分别只存在于共同的 `skills/ad-wiki-query/SKILL.md` 和 `skills/ad-wiki-maintainer/SKILL.md`。当前版本不声明 `mcpServers`、`apps`、`hooks`、`agents` 或其他未实现能力。
 
 ### 3. Codex 团队 Marketplace
 ```json
@@ -442,14 +449,21 @@ claude plugin marketplace add <ad-wiki-distribution-repo-root>
 claude plugin install ad-wiki@ad-wiki-team
 ```
 
-Claude Code 中显式调用名为 `/ad-wiki:ad-wiki-maintainer`。安装或升级后使用新线程；Claude Code 也可以按提示执行 `/reload-plugins`。
+Claude Code 中显式调用名分别为 `/ad-wiki:ad-wiki-query` 与 `/ad-wiki:ad-wiki-maintainer`。安装或升级后使用新线程；Claude Code 也可以按提示执行 `/reload-plugins`。
 
 ## 九、核心 Skill 契约
 ### 1. 触发描述
 ```yaml
 ---
+name: ad-wiki-query
+description: Answer questions from one initialized AD Wiki with cited, read-only synthesis. Use when finding, comparing, explaining, summarizing, or assessing knowledge already compiled in an AD Wiki.
+---
+```
+
+```yaml
+---
 name: ad-wiki-maintainer
-description: Maintain team knowledge repositories as persistent OKF v0.2 bundles. Use when initializing an AD Wiki, ingesting immutable sources, querying with citations, writing durable syntheses back to the wiki, linting knowledge health, reconciling contradictions, refreshing stale concepts, or migrating an AD Wiki profile.
+description: Maintain team knowledge repositories as persistent OKF v0.2 bundles. Use when initializing an AD Wiki, ingesting immutable sources, writing durable syntheses back to the wiki, linting knowledge health, reconciling contradictions, refreshing stale concepts, or migrating an AD Wiki profile.
 ---
 ```
 
@@ -530,8 +544,8 @@ ingest_key = canonical_source_locator + normalized_content_sha256
 ### 3. Query
 ```latex
 读取根 index
-→ 搜索相关 Concept
-→ 读取最小必要页面集合
+→ 调用共享 Context Builder
+→ 按稳定排序与预算装配相关 Concept
 → 必要时回溯 Raw Source
 → 区分事实、推断和缺口
 → 输出带来源的回答
@@ -618,7 +632,7 @@ DISCOVERED
 {
   "run_id": "run-20260815-001",
   "operation": "ingest",
-  "plugin_version": "0.3.0",
+  "plugin_version": "0.4.0",
   "profile_version": "0.1",
   "inputs": ["raw/sources/karpathy-llm-wiki.md"],
   "source_hashes": {"raw/sources/karpathy-llm-wiki.md": "sha256:..."},
@@ -784,7 +798,7 @@ Raw Source 是不可信数据。来源中出现“忽略规则”“执行命令
 
 ## 十八、团队发布与版本治理
 ### 1. 版本分层
-+ Plugin 使用 SemVer，例如当前双宿主兼容版 `0.3.0`；
++ Plugin 使用 SemVer，例如当前独立 Query Skill 版 `0.4.0`；
 + AD-Wiki Profile 单独版本化，例如 `profile_version: "0.1"`；
 + OKF 版本写在 Bundle 根 `index.md`，当前为 `0.2`；
 + 三者不能混成一个版本号。
@@ -824,6 +838,7 @@ Raw Source 是不可信数据。来源中出现“忽略规则”“执行命令
 
 + Codex 与 Claude Code 原生团队 Marketplace；
 + `ad-wiki-maintainer` Skill；
++ `ad-wiki-query` Skill；
 + Init、Ingest、Query、Writeback、Lint；
 + 基础校验脚本与受门禁的事务、搜索、迁移命令；
 + Source、Concept、Synthesis、Question 模板；
@@ -855,8 +870,8 @@ Raw Source 是不可信数据。来源中出现“忽略规则”“执行命令
 ## 二十、验收标准
 ### Plugin 分发
 + 团队成员可以从 Codex 或 Claude Code 的原生 Marketplace 安装同一个 `ad-wiki`；
-+ 新线程能发现并触发 canonical `ad-wiki-maintainer`；Claude Code 显式入口为 `/ad-wiki:ad-wiki-maintainer`；
-+ 两套 Plugin Manifest、Marketplace 和当前 canonical `ad-wiki-maintainer` Skill 均通过各自官方校验脚本；
++ 新线程能发现并触发 canonical `ad-wiki-query` 与 `ad-wiki-maintainer`；Claude Code 显式入口分别为 `/ad-wiki:ad-wiki-query` 和 `/ad-wiki:ad-wiki-maintainer`；
++ 两套 Plugin Manifest、Marketplace 和两个 canonical Skill 均通过各自官方校验脚本；
 + 两个 Manifest 的正式版本一致，两个 Marketplace 指向同一个 Plugin 根；
 + Plugin 不包含任何具体团队知识或凭据。
 
@@ -875,6 +890,7 @@ Raw Source 是不可信数据。来源中出现“忽略规则”“执行命令
 
 ### Query 与 Writeback
 + Query 优先查 Wiki，必要时回到 Raw；
++ Query 通过版本化 Context Envelope 获取领域、语言、Concept 正文、来源和截断状态，查询前后仓库字节不变；
 + 回答区分事实、推断和未知；
 + 具体主张能关联 `sources[].id`；
 + 高价值答案可以经独立 Writeback 流程沉淀；
@@ -890,7 +906,7 @@ Raw Source 是不可信数据。来源中出现“忽略规则”“执行命令
 ## 二十一、最终建议
 团队版 AD-Wiki 不应只是一个很长的 Skill，也不应一开始就建设中心化知识平台。最合理的产品形态是：
 
-> **以团队 Plugin 统一分发维护能力，以内嵌 Skill 承载知识工作流，以确定性脚本保证质量，以独立 OKF Bundle 保存每个团队的知识。**
+> **以团队 Plugin 统一分发查询与维护能力，以独立 Skill 承载只读问答和写入工作流，以确定性脚本保证质量，以独立 OKF Bundle 保存每个团队的知识。**
 >
 
 这套架构同时保留三种独立性：

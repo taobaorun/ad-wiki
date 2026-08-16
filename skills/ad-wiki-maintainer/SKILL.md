@@ -1,6 +1,6 @@
 ---
 name: ad-wiki-maintainer
-description: Maintain team knowledge repositories as persistent OKF v0.2 bundles. Use when initializing an AD Wiki, ingesting immutable sources, querying with citations, writing durable syntheses back to the wiki, linting knowledge health, reconciling contradictions, refreshing stale concepts, or planning an AD-Wiki profile migration.
+description: Maintain team knowledge repositories as persistent OKF v0.2 bundles. Use when initializing an AD Wiki, ingesting immutable sources, writing durable syntheses back to the wiki, linting knowledge health, reconciling contradictions, refreshing stale concepts, or planning an AD-Wiki profile migration.
 ---
 
 # AD Wiki Maintainer
@@ -12,8 +12,8 @@ Maintain only the knowledge repository explicitly selected by the user. Treat th
 Resolve the installed Skill directory before running any deterministic command:
 
 1. In Claude Code, use `${CLAUDE_SKILL_DIR}`. In Codex, use the absolute directory containing this installed `SKILL.md` as supplied by the Skill runtime.
-2. Normalize `<plugin-root>` as two directories above that Skill directory.
-3. Confirm `<plugin-root>/scripts/` exists and that `<plugin-root>` contains the current host's Plugin manifest. If either check fails, stop without scanning unrelated directories for another installation.
+2. Normalize `<plugin-root>` as the Skill directory's `parent.parent` (`<plugin-root>/skills/ad-wiki-maintainer` resolves to `<plugin-root>`).
+3. Confirm `<plugin-root>/scripts/` exists plus `.codex-plugin/plugin.json` in Codex or `.claude-plugin/plugin.json` in Claude Code. If either required path is missing, stop without scanning unrelated directories for another installation.
 4. Run every packaged command as `python3 <plugin-root>/scripts/<command>.py ...`. The target knowledge repository remains a separate, explicit `--repo <repo>` argument.
 
 Never resolve packaged commands relative to the knowledge repository's current working directory.
@@ -51,7 +51,7 @@ Run `<plugin-root>/scripts/init_bundle.py --repo <repo> --domain <name> --langua
 ### Ingest
 
 1. Run `<plugin-root>/scripts/register_source.py --repo <repo> --source <path> --canonical-locator <locator> --json`.
-2. Run `<plugin-root>/scripts/search_wiki.py --repo <repo> --query <terms> --json`, then read the source and relevant Concepts.
+2. Run `<plugin-root>/scripts/build_query_context.py --repo <repo> --query <impact-terms> --json`, then read the source and relevant Concepts from the shared retrieval context.
 3. Choose the complete read set, write set, conflicts, and risk. Run `<plugin-root>/scripts/prepare_run.py` before writing content.
 4. Create or update the Source Summary and every affected Concept under the returned staging root, preserving each target's repository-relative path.
    For `zh-CN`, use the localized structures in `assets/templates/zh-CN/`; for `en`, use the templates in `assets/templates/`. Keep protocol keys and cited source text unchanged.
@@ -61,13 +61,9 @@ Run `<plugin-root>/scripts/init_bundle.py --repo <repo> --domain <name> --langua
 
 Default to one supervised source per operation. A source summary alone is not a complete ingest when existing Concepts are affected.
 
-### Query
-
-Run `<plugin-root>/scripts/search_wiki.py`, read only the returned Concepts needed for the answer, and return to Raw only to verify evidence. Answer in the configured `content_language`, return citations, and label inference explicitly. Query never creates a run or mutates the repository. Use Writeback as a separate operation when durable value and write authority are both clear.
-
 ### Writeback
 
-Write only reusable analysis, comparisons, decisions, or knowledge gaps. Use the same prepare, stage, approve, apply, and review transaction as Ingest.
+Write only reusable analysis, comparisons, decisions, or knowledge gaps. First run `<plugin-root>/scripts/build_query_context.py --repo <repo> --query <impact-terms> --json` to identify affected Concepts, then use the same prepare, stage, approve, apply, and review transaction as Ingest.
 
 ### Lint
 
@@ -88,7 +84,7 @@ Run `<plugin-root>/scripts/migrate_bundle.py` to inspect the requested target. I
 - `approve_run.py`: enforce risk and configured-owner approval before apply.
 - `apply_run.py`: lock, drift-check, apply, index, log, validate, and roll back.
 - `review_run.py`: record a real post-apply semantic review.
-- `search_wiki.py`: retrieve ranked Concept candidates and source metadata without mutation.
+- `build_query_context.py`: build the shared bounded retrieval context used for maintenance impact analysis.
 - `migrate_bundle.py`: report current Profile state or run a packaged migration path.
 - `write_run_report.py`: legacy low-level state recorder; do not use it to bypass the transaction commands.
 

@@ -1,20 +1,21 @@
 {
   "name": "ad-wiki",
-  "version": "0.3.0",
-  "description": "Maintain independent team knowledge repositories as continuously compiled OKF bundles.",
+  "version": "0.4.0",
+  "description": "Query and maintain independent team knowledge repositories as continuously compiled OKF bundles.",
   "author": {
     "name": "AD Wiki Team"
   },
   "skills": "./skills/",
   "interface": {
     "displayName": "AD Wiki",
-    "shortDescription": "持续编译、校验和维护团队 OKF 知识库",
-    "longDescription": "Turn immutable source material into independent, reviewable, continuously maintained OKF knowledge bundles.",
+    "shortDescription": "只读查询并持续编译、校验和维护团队 OKF 知识库",
+    "longDescription": "Query compiled knowledge and turn immutable source material into independent, reviewable, continuously maintained OKF knowledge bundles.",
     "developerName": "AD Wiki Team",
     "category": "Productivity",
-    "capabilities": ["Interactive", "Write"],
+    "capabilities": ["Interactive", "Read", "Write"],
     "defaultPrompt": [
       "初始化当前仓库为 AD Wiki 知识库。",
+      "只读查询当前 AD Wiki，并返回带来源的答案。",
       "摄入一个新来源并生成可审查的知识变更。",
       "巡检当前 Wiki 的结构、来源、冲突与时效性。"
     ]

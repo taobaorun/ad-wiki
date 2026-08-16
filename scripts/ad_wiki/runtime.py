@@ -13,6 +13,7 @@ from .core import (
     ALLOWED_OPERATIONS,
     ALLOWED_RISKS,
     HUMAN_ACTOR,
+    OKF_VERSION,
     PLUGIN_VERSION,
     PROFILE_VERSION,
     RUN_ID,
@@ -44,6 +45,7 @@ from .core import (
 WRITABLE_OPERATIONS = {"ingest", "writeback", "lint", "migrate"}
 ACTOR = re.compile(r"(?:human|process):[^\s:]+|[^\s/:]+/[^\s/]+")
 SEARCH_TERM = re.compile(r"[a-z0-9][a-z0-9_-]*|[\u3400-\u9fff]", re.IGNORECASE)
+QUERY_CONTEXT_SCHEMA_VERSION = "1"
 
 
 def _run_path(root: Path, run_id: str) -> Path:
@@ -630,7 +632,10 @@ def search_repository(
     if unsafe:
         raise ADWikiError("Bundle contains unsafe Markdown paths")
     for path in markdown:
-        if path.name in {"index.md", "log.md"}:
+        bundle_relative = path.relative_to(bundle)
+        if path.name in {"index.md", "log.md"} or any(
+            part.startswith(".") for part in bundle_relative.parts
+        ):
             continue
         text = path.read_text(encoding="utf-8")
         parsed = _frontmatter(text)
@@ -644,7 +649,7 @@ def search_repository(
             "title": " ".join(_search_tokens(title)),
             "description": " ".join(_search_tokens(description)),
             "body": " ".join(_search_tokens(body)),
-            "path": path.relative_to(bundle).as_posix().casefold(),
+            "path": bundle_relative.as_posix().casefold(),
         }
         score = sum(
             6 * haystacks["title"].count(term)
@@ -669,7 +674,7 @@ def search_repository(
         ]
         results.append(
             {
-                "concept_id": path.relative_to(bundle).with_suffix("").as_posix(),
+                "concept_id": bundle_relative.with_suffix("").as_posix(),
                 "description": description,
                 "path": _relative_posix(path, root),
                 "score": score,
@@ -685,6 +690,91 @@ def search_repository(
         "count": min(len(results), limit),
         "query": query,
         "results": results[:limit],
+        "total": len(results),
+    }
+
+
+def build_query_context(
+    repo: str | os.PathLike[str],
+    *,
+    query: str,
+    max_concepts: int = 8,
+    max_chars: int = 30_000,
+) -> dict[str, Any]:
+    """Build a bounded, deterministic, read-only context envelope for one Wiki query."""
+    if max_concepts < 1 or max_concepts > 100:
+        raise ADWikiError("max-concepts must be between 1 and 100")
+    if max_chars < 1 or max_chars > 1_000_000:
+        raise ADWikiError("max-chars must be between 1 and 1000000")
+
+    root = _repository_root(repo)
+    _, bundle, config = _configured_roots(root)
+    _require_supported_profile(config)
+    content_language = _content_language(config)
+    domain_config = config.get("domain")
+    if not isinstance(domain_config, dict):
+        raise ADWikiError("domain configuration must be an object")
+    domain = domain_config.get("name")
+    if not isinstance(domain, str) or not domain.strip():
+        raise ADWikiError("domain.name must be a non-empty string")
+    root_index = bundle / "index.md"
+    if root_index.is_file():
+        parsed_index = _frontmatter(root_index.read_text(encoding="utf-8"))
+        if parsed_index:
+            index_fields, _, _ = _top_level(parsed_index[0])
+            declared_okf = index_fields.get("okf_version")
+            if declared_okf and declared_okf != OKF_VERSION:
+                raise ADWikiError(
+                    f"unsupported OKF version {declared_okf}; expected {OKF_VERSION}; "
+                    "use the Migrate workflow"
+                )
+
+    search = search_repository(root, query=query, limit=max_concepts)
+    remaining_chars = max_chars
+    included_chars = 0
+    content_was_truncated = False
+    concepts: list[dict[str, Any]] = []
+    for candidate in search["results"]:
+        path = _resolve_inside(root, candidate["path"], "query context Concept")
+        if path.is_symlink() or not path.is_file() or not _path_is_within(path, bundle):
+            raise ADWikiError("query context Concept must be a regular Bundle file")
+        full_content = path.read_text(encoding="utf-8")
+        content = full_content[:remaining_chars]
+        content_truncated = len(content) < len(full_content)
+        concepts.append(
+            {
+                **candidate,
+                "content": content,
+                "content_truncated": content_truncated,
+            }
+        )
+        included_chars += len(content)
+        remaining_chars -= len(content)
+        if content_truncated or remaining_chars == 0:
+            content_was_truncated = content_truncated
+            break
+
+    included_count = len(concepts)
+    return {
+        "schema_version": QUERY_CONTEXT_SCHEMA_VERSION,
+        "query": query,
+        "repository": {
+            "bundle": search["bundle"],
+            "content_language": content_language,
+            "domain": domain.strip(),
+            "okf_version": OKF_VERSION,
+            "profile_version": str(config.get("profile_version", PROFILE_VERSION)),
+        },
+        "retrieval": {
+            "provider": "builtin",
+            "candidate_count": search["total"],
+            "included_count": included_count,
+            "included_chars": included_chars,
+            "max_chars": max_chars,
+            "max_concepts": max_concepts,
+            "truncated": search["total"] > included_count or content_was_truncated,
+        },
+        "concepts": concepts,
     }
 
 

@@ -8,7 +8,7 @@
   "plugins": [
     {
       "name": "ad-wiki",
-      "source": "./plugins/ad-wiki",
+      "source": "./",
       "description": "Maintain independent team knowledge repositories as continuously compiled OKF bundles.",
       "category": "productivity"
     }

@@ -8,7 +8,7 @@
       "name": "ad-wiki",
       "source": {
         "source": "local",
-        "path": "./plugins/ad-wiki"
+        "path": "./"
       },
       "policy": {
         "installation": "AVAILABLE",

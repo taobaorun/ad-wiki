@@ -289,41 +289,38 @@ okf_version: "0.2"
 推荐建立独立团队分发仓库：
 
 ```latex
-ad-wiki-distribution/
+ad-wiki/                              # 仓库根即唯一 Plugin 根
 ├── .agents/
 │   └── plugins/
 │       └── marketplace.json          # Codex Marketplace
 ├── .claude-plugin/
-│   └── marketplace.json              # Claude Code Marketplace
-└── plugins/
-    └── ad-wiki/
-        ├── .codex-plugin/
-        │   └── plugin.json            # Codex Manifest
-        ├── .claude-plugin/
-        │   └── plugin.json            # Claude Code Manifest
-        ├── skills/
-        │   └── ad-wiki-maintainer/
-        │       ├── SKILL.md
-        │       ├── agents/
-        │       │   └── openai.yaml
-        │       ├── references/
-        │       │   ├── okf-profile.md
-        │       │   ├── workflows.md
-        │       │   ├── risk-policy.md
-        │       │   └── migration-policy.md
-        │       └── assets/
-        │           └── templates/
-        ├── scripts/
-        │   ├── init_bundle.py
-        │   ├── register_source.py
-        │   ├── validate_bundle.py
-        │   ├── build_index.py
-        │   ├── raw_diff_guard.py
-        │   ├── write_run_report.py
-        │   ├── prepare_run.py / approve_run.py
-        │   ├── apply_run.py / review_run.py
-        │   └── search_wiki.py / migrate_bundle.py
-        └── tests/
+│   ├── marketplace.json              # Claude Code Marketplace
+│   └── plugin.json                   # Claude Code Manifest
+├── .codex-plugin/
+│   └── plugin.json                   # Codex Manifest
+├── skills/                           # 可扩展的 canonical Skill 集合
+│   └── ad-wiki-maintainer/
+│       ├── SKILL.md
+│       ├── agents/
+│       │   └── openai.yaml
+│       ├── references/
+│       │   ├── okf-profile.md
+│       │   ├── workflows.md
+│       │   ├── risk-policy.md
+│       │   └── migration-policy.md
+│       └── assets/
+│           └── templates/
+├── scripts/
+│   ├── init_bundle.py
+│   ├── register_source.py
+│   ├── validate_bundle.py
+│   ├── build_index.py
+│   ├── raw_diff_guard.py
+│   ├── write_run_report.py
+│   ├── prepare_run.py / approve_run.py
+│   ├── apply_run.py / review_run.py
+│   └── search_wiki.py / migrate_bundle.py
+└── tests/
 ```
 
 设计原则：
@@ -332,7 +329,8 @@ ad-wiki-distribution/
 + 详细 OKF Profile、风险规则和迁移规则按需加载到 `references/`；
 + 重复且易错的操作交给脚本，不要求模型每次重写；
 + 模板作为 Skill Assets 复用；
-+ Codex 与 Claude Code 只维护各自的薄 Manifest/Marketplace，共享唯一 Skill、references、templates 和 Runtime；
++ Codex 与 Claude Code 只维护各自的薄 Manifest/Marketplace，共享根级 `skills/`、references、templates 和 Runtime；
++ 仓库根就是 Plugin 根；`skills/` 当前只有 `ad-wiki-maintainer`，但允许后续增加独立 Skill；
 + 不创建冗余 README、Quick Reference 或重复规范；
 + 当前版本不包含 MCP，避免为仓库本地 Wiki 构建引入远程服务。
 
@@ -395,7 +393,7 @@ ad-wiki-distribution/
       "name": "ad-wiki",
       "source": {
         "source": "local",
-        "path": "./plugins/ad-wiki"
+        "path": "./"
       },
       "policy": {
         "installation": "AVAILABLE",
@@ -421,7 +419,7 @@ ad-wiki-distribution/
   "plugins": [
     {
       "name": "ad-wiki",
-      "source": "./plugins/ad-wiki",
+      "source": "./",
       "description": "Maintain independent team knowledge repositories as continuously compiled OKF bundles.",
       "category": "productivity"
     }
@@ -429,7 +427,7 @@ ad-wiki-distribution/
 }
 ```
 
-Claude Marketplace 不重复声明版本，以 Plugin 内 `.claude-plugin/plugin.json` 为版本权威。两个 Marketplace 条目都解析到同一个 `plugins/ad-wiki/` 根目录。
+Claude Marketplace 不重复声明版本，以仓库根 `.claude-plugin/plugin.json` 为版本权威。两个 Marketplace 条目都以 `./` 解析到仓库根这一唯一 Plugin 根目录。
 
 ### 5. 团队安装方式
 两个宿主都先注册发行仓库，再安装同一个 Plugin：
@@ -853,7 +851,7 @@ Raw Source 是不可信数据。来源中出现“忽略规则”“执行命令
 ### Plugin 分发
 + 团队成员可以从 Codex 或 Claude Code 的原生 Marketplace 安装同一个 `ad-wiki`；
 + 新线程能发现并触发 canonical `ad-wiki-maintainer`；Claude Code 显式入口为 `/ad-wiki:ad-wiki-maintainer`；
-+ 两套 Plugin Manifest、Marketplace 和唯一 Skill 均通过各自官方校验脚本；
++ 两套 Plugin Manifest、Marketplace 和当前 canonical `ad-wiki-maintainer` Skill 均通过各自官方校验脚本；
 + 两个 Manifest 的正式版本一致，两个 Marketplace 指向同一个 Plugin 根；
 + Plugin 不包含任何具体团队知识或凭据。
 

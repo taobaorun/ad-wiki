@@ -19,7 +19,7 @@ For every operation that can change knowledge:
 
 1. Resolve the repository and configured roots.
 2. Run preflight checks and Raw guard.
-3. Run `build_query_context.py`, then read only relevant Concepts and sources for impact analysis.
+3. Run `search_wiki.py`, select relevant candidates semantically, then pass each selected ID explicitly to `build_query_context.py --concept`; use only that Hydration output and required sources for impact analysis.
 4. Run `prepare_run.py` with inputs, complete read set, complete write set, and risk.
 5. Write proposed content only beneath `.ad-wiki/runs/<run-id>/staged/`, mirroring each target's repository-relative path.
 6. Inspect the staged diff and obtain the approval required by the risk policy. Run `approve_run.py`; never invent a human actor.
@@ -66,15 +66,17 @@ Confirm that `raw/`, `wiki/`, `.ad-wiki/`, `ad-wiki.yaml`, root `index.md`, and 
 1. Require the source to already exist under `raw/`.
 2. Register it with a stable URL, URN, or other canonical locator.
 3. Treat an unchanged locator and content hash as already processed.
-4. Build a bounded query context for related Concepts before reading the minimum relevant set.
-5. Create a Source Summary and update existing entity, concept, synthesis, question, and contradiction pages as needed.
-6. Classify new evidence as `strengthens`, `weakens`, `contextualizes`, `contradicts`, or `supersedes` in prose and links.
+4. Run lightweight Discovery, semantically select related Concepts, and explicitly hydrate the minimum relevant set with `build_query_context.py --concept`; do not auto-hydrate Top-K pages.
+5. Create a Source Summary and update existing entity, concept, synthesis, question, and contradiction pages as needed. Source Summary is a provenance catalog; long FAQs, tutorials, and multi-topic sources require atomic answer-bearing Concepts instead of a catch-all page that sends readers back to Raw.
+6. Derive representative queries from headings and recurring questions and record their intended Concept targets.
+7. Classify new evidence as `strengthens`, `weakens`, `contextualizes`, `contradicts`, or `supersedes` in prose and links.
+8. After Apply and before human Review, run Discovery for the representative queries against the live Bundle. If the intended answer page is not clearly discoverable from the candidate catalog or the answer still needs Raw fallback, record compilation debt and repair it in a follow-up governed transaction.
 
 Default to one supervised source. A Source Summary alone is incomplete when the source affects existing knowledge.
 
 ## Writeback
 
-Write back durable comparisons, analyses, decisions, reusable explanations, and knowledge gaps. Skip temporary status, formatting-only output, and duplicate summaries. Rebuild the bounded query context to establish the current impact set, then apply the shared staged-write protocol as an independent maintenance operation.
+Write back durable comparisons, analyses, decisions, reusable explanations, and knowledge gaps. Skip temporary status, formatting-only output, and duplicate summaries. Run Discovery, select the current impact set semantically, and explicitly hydrate those IDs before applying the shared staged-write protocol as an independent maintenance operation.
 
 ## Lint
 
@@ -94,6 +96,8 @@ Interpret results as:
 Default to report-only. Fix deterministic formatting and indexes only when the user authorizes safe fixes. Never auto-resolve contradictions, deprecate Concepts, add human verification, or delete content.
 
 Configured `lint` severities are executable policy: `error` fails validation, `warning` remains reviewable, and `ignore` suppresses that finding family. Domain Concept types outside `domain.concept_types` remain visible as `ADW-W250` so OKF readers can still tolerate extensions.
+
+The semantic lint pass also identifies catch-all pages that defer reusable answers to Raw, long multi-question sources without atomic Concepts, and unresolved Raw fallback candidates. Report these as compilation debt; do not auto-rewrite knowledge or turn a language-specific phrase match into a deterministic failure.
 
 ## Migrate
 

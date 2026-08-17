@@ -4,6 +4,7 @@ import argparse
 import json
 import sys
 from datetime import date
+from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from .core import (
@@ -18,12 +19,14 @@ from .core import (
     validate_repository,
     write_run_report,
 )
+from .doctor import inspect_plugin
 from .runtime import (
     apply_run,
     approve_run,
     build_query_context,
     migrate_repository,
     prepare_run,
+    query_registered_raw,
     review_run,
     search_repository,
 )
@@ -238,9 +241,9 @@ def review_main(argv: Sequence[str] | None = None) -> int:
 
 
 def search_main(argv: Sequence[str] | None = None) -> int:
-    parser = _base_parser("Search the current AD-Wiki Bundle without mutating it.")
+    parser = _base_parser("Discover lightweight candidate pages in the current AD-Wiki Bundle.")
     parser.add_argument("--query", required=True)
-    parser.add_argument("--limit", type=int, default=10)
+    parser.add_argument("--limit", type=int, default=12)
     return _execute(
         parser,
         lambda args: (search_repository(args.repo, query=args.query, limit=args.limit), 0),
@@ -249,9 +252,9 @@ def search_main(argv: Sequence[str] | None = None) -> int:
 
 
 def query_context_main(argv: Sequence[str] | None = None) -> int:
-    parser = _base_parser("Build a bounded read-only context envelope for one AD-Wiki query.")
+    parser = _base_parser("Hydrate full Markdown for explicitly selected AD-Wiki Concepts.")
     parser.add_argument("--query", required=True)
-    parser.add_argument("--max-concepts", type=int, default=8)
+    parser.add_argument("--concept", action="append", required=True, dest="concept_ids")
     parser.add_argument("--max-chars", type=int, default=30_000)
     return _execute(
         parser,
@@ -259,7 +262,29 @@ def query_context_main(argv: Sequence[str] | None = None) -> int:
             build_query_context(
                 args.repo,
                 query=args.query,
-                max_concepts=args.max_concepts,
+                concept_ids=args.concept_ids,
+                max_chars=args.max_chars,
+            ),
+            0,
+        ),
+        argv,
+    )
+
+
+def raw_fallback_main(argv: Sequence[str] | None = None) -> int:
+    parser = _base_parser("Build a bounded Raw fallback context from selected Concept provenance.")
+    parser.add_argument("--query", required=True)
+    parser.add_argument("--concept", action="append", required=True, dest="concept_ids")
+    parser.add_argument("--max-sources", type=int, default=2)
+    parser.add_argument("--max-chars", type=int, default=6_000)
+    return _execute(
+        parser,
+        lambda args: (
+            query_registered_raw(
+                args.repo,
+                query=args.query,
+                concept_ids=args.concept_ids,
+                max_sources=args.max_sources,
                 max_chars=args.max_chars,
             ),
             0,
@@ -276,3 +301,23 @@ def migrate_main(argv: Sequence[str] | None = None) -> int:
         lambda args: (migrate_repository(args.repo, target_profile=args.target_profile), 0),
         argv,
     )
+
+
+def doctor_main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Check the local AD-Wiki Plugin package and optional Wiki.")
+    parser.add_argument(
+        "--plugin-root",
+        default=str(Path(__file__).resolve().parents[2]),
+        help="AD-Wiki Plugin root (default: packaged root)",
+    )
+    parser.add_argument("--repo", help="optional initialized AD-Wiki repository to validate")
+    parser.add_argument("--json", action="store_true", help="emit structured JSON")
+    args = parser.parse_args(argv)
+    try:
+        payload = inspect_plugin(args.plugin_root, repo=args.repo)
+        exit_code = 0 if payload["ready"] else 1
+    except (ADWikiError, OSError, ValueError, json.JSONDecodeError) as exc:
+        payload = {"error": str(exc), "status": "error"}
+        exit_code = 2
+    _render(payload, args.json)
+    return exit_code

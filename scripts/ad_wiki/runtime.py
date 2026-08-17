@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import tempfile
+from collections import Counter
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable, Iterator
@@ -44,8 +46,53 @@ from .core import (
 
 WRITABLE_OPERATIONS = {"ingest", "writeback", "lint", "migrate"}
 ACTOR = re.compile(r"(?:human|process):[^\s:]+|[^\s/:]+/[^\s/]+")
-SEARCH_TERM = re.compile(r"[a-z0-9][a-z0-9_-]*|[\u3400-\u9fff]", re.IGNORECASE)
-QUERY_CONTEXT_SCHEMA_VERSION = "1"
+SEARCH_SEGMENT = re.compile(r"[a-z0-9][a-z0-9_-]*|[\u3400-\u9fff]+", re.IGNORECASE)
+QUERY_NOISE = (
+    "告诉我",
+    "有什么",
+    "什么是",
+    "的",
+    "是什么",
+    "为什么",
+    "什么",
+    "有何",
+    "如何",
+    "怎么",
+    "怎样",
+    "请问",
+    "一下",
+    "查询",
+    "介绍",
+    "讲讲",
+    "相关",
+    "问题",
+)
+QUERY_TOKEN_NOISE = frozenset(
+    {
+        "a",
+        "about",
+        "an",
+        "are",
+        "can",
+        "describe",
+        "explain",
+        "how",
+        "is",
+        "me",
+        "please",
+        "s",
+        "tell",
+        "the",
+        "was",
+        "were",
+        "what",
+        "why",
+        "you",
+    }
+)
+QUERY_PROTOCOL_SCHEMA_VERSION = "2"
+SEARCH_ALGORITHM_VERSION = "2"
+CONCEPT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*")
 
 
 def _run_path(root: Path, run_id: str) -> Path:
@@ -601,15 +648,164 @@ def review_run(
     return {**report, "result": decision}
 
 
-def _search_tokens(value: str) -> list[str]:
-    return SEARCH_TERM.findall(value.casefold())
+def _search_tokens(value: str, *, query: bool = False) -> list[str]:
+    normalized = value.casefold()
+    if query:
+        for phrase in sorted(QUERY_NOISE, key=len, reverse=True):
+            normalized = normalized.replace(phrase, " ")
+    tokens: list[str] = []
+    for match in SEARCH_SEGMENT.finditer(normalized):
+        segment = match.group(0)
+        if not segment:
+            continue
+        if not ("\u3400" <= segment[0] <= "\u9fff"):
+            tokens.append(segment)
+            continue
+        if len(segment) == 1:
+            tokens.append(segment)
+            continue
+        for size in (2, 3):
+            if len(segment) < size:
+                continue
+            tokens.extend(segment[index : index + size] for index in range(len(segment) - size + 1))
+    return tokens
+
+
+def _query_terms(value: str) -> list[str]:
+    return list(
+        dict.fromkeys(
+            token
+            for token in _search_tokens(value, query=True)
+            if token not in QUERY_TOKEN_NOISE
+            and not (len(token) == 1 and "\u3400" <= token <= "\u9fff")
+        )
+    )
+
+
+def _minimum_term_matches(term_count: int) -> int:
+    if term_count == 1:
+        return 1
+    if term_count <= 4:
+        return 2
+    return 3
+
+
+def _score_search_document(
+    *,
+    query: str,
+    terms: list[str],
+    title: str,
+    description: str,
+    body: str,
+    path: str,
+    full_text: str,
+) -> dict[str, Any] | None:
+    field_weights = {"title": 10, "description": 3, "body": 1, "path": 2}
+    field_counts = {
+        "title": Counter(_search_tokens(title)),
+        "description": Counter(_search_tokens(description)),
+        "body": Counter(_search_tokens(body)),
+        "path": Counter(_search_tokens(path)),
+    }
+    matched_fields: dict[str, list[str]] = {}
+    score_components: dict[str, int] = {}
+    matched_terms: set[str] = set()
+    for field, counts in field_counts.items():
+        field_terms = sorted(term for term in terms if counts[term] > 0)
+        if field_terms:
+            matched_fields[field] = field_terms
+            matched_terms.update(field_terms)
+        score_components[field] = field_weights[field] * sum(counts[term] for term in terms)
+
+    if len(matched_terms) < _minimum_term_matches(len(terms)):
+        return None
+    coverage = len(matched_terms) / len(terms)
+    score_components["coverage"] = round(20 * coverage)
+    score_components["exact_query"] = 8 if query.casefold() in full_text.casefold() else 0
+    score = sum(score_components.values())
+    if score <= 0:
+        return None
+    return {
+        "matched_fields": matched_fields,
+        "matched_terms": sorted(matched_terms),
+        "score": score,
+        "score_components": score_components,
+        "term_coverage": round(coverage, 4),
+    }
+
+
+def _best_snippet(body: str, terms: list[str]) -> str:
+    best: tuple[int, int, str] | None = None
+    for position, line in enumerate(body.splitlines()):
+        candidate = line.strip()
+        if not candidate:
+            continue
+        line_terms = set(_search_tokens(candidate))
+        matches = len(line_terms.intersection(terms))
+        if matches <= 0:
+            continue
+        ranked = (matches, -position, candidate[:240])
+        if best is None or ranked > best:
+            best = ranked
+    return best[2] if best else ""
+
+
+def _suppress_covered_source_summaries(results: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    covered_resources = {
+        str(source["resource"])
+        for result in results
+        if result["type"] != "Source Summary"
+        for source in result["sources"]
+        if source.get("resource")
+    }
+    filtered: list[dict[str, Any]] = []
+    suppressed = 0
+    for result in results:
+        resources = {str(source["resource"]) for source in result["sources"] if source.get("resource")}
+        if result["type"] == "Source Summary" and resources.intersection(covered_resources):
+            suppressed += 1
+            continue
+        filtered.append(result)
+    return filtered, suppressed
+
+
+def _query_repository_metadata(
+    root: Path,
+    bundle: Path,
+    config: dict[str, Any],
+) -> dict[str, str]:
+    content_language = _content_language(config)
+    domain_config = config.get("domain")
+    if not isinstance(domain_config, dict):
+        raise ADWikiError("domain configuration must be an object")
+    domain = domain_config.get("name")
+    if not isinstance(domain, str) or not domain.strip():
+        raise ADWikiError("domain.name must be a non-empty string")
+    root_index = bundle / "index.md"
+    if root_index.is_file():
+        parsed_index = _frontmatter(root_index.read_text(encoding="utf-8"))
+        if parsed_index:
+            index_fields, _, _ = _top_level(parsed_index[0])
+            declared_okf = index_fields.get("okf_version")
+            if declared_okf and declared_okf != OKF_VERSION:
+                raise ADWikiError(
+                    f"unsupported OKF version {declared_okf}; expected {OKF_VERSION}; "
+                    "use the Migrate workflow"
+                )
+    return {
+        "bundle": _relative_posix(bundle, root),
+        "content_language": content_language,
+        "domain": domain.strip(),
+        "okf_version": OKF_VERSION,
+        "profile_version": str(config.get("profile_version", PROFILE_VERSION)),
+    }
 
 
 def search_repository(
     repo: str | os.PathLike[str],
     *,
     query: str,
-    limit: int = 10,
+    limit: int = 12,
 ) -> dict[str, Any]:
     root = _repository_root(repo)
     _, bundle, config = _configured_roots(root)
@@ -624,7 +820,7 @@ def search_repository(
     if not (bundle / "index.md").is_file():
         raise ADWikiError("Bundle root index.md is missing")
 
-    terms = _search_tokens(query)
+    terms = _query_terms(query)
     if not terms:
         raise ADWikiError("query has no searchable terms")
     results: list[dict[str, Any]] = []
@@ -645,29 +841,17 @@ def search_repository(
         fields, _, _ = _top_level(lines)
         title = fields.get("title") or path.stem.replace("-", " ").title()
         description = fields.get("description") or ""
-        haystacks = {
-            "title": " ".join(_search_tokens(title)),
-            "description": " ".join(_search_tokens(description)),
-            "body": " ".join(_search_tokens(body)),
-            "path": bundle_relative.as_posix().casefold(),
-        }
-        score = sum(
-            6 * haystacks["title"].count(term)
-            + 3 * haystacks["description"].count(term)
-            + haystacks["body"].count(term)
-            + 2 * haystacks["path"].count(term)
-            for term in terms
+        scoring = _score_search_document(
+            query=query,
+            terms=terms,
+            title=title,
+            description=description,
+            body=body,
+            path=bundle_relative.as_posix(),
+            full_text=text,
         )
-        if query.casefold() in text.casefold():
-            score += 8
-        if score <= 0:
+        if scoring is None:
             continue
-        snippet = ""
-        for line in body.splitlines():
-            if any(term in " ".join(_search_tokens(line)) for term in terms):
-                snippet = line.strip()[:240]
-                if snippet:
-                    break
         sources = [
             {key: entry[key] for key in ("id", "resource", "title") if entry.get(key)}
             for entry in _source_entries(lines, fields.get("sources"))
@@ -677,104 +861,328 @@ def search_repository(
                 "concept_id": bundle_relative.with_suffix("").as_posix(),
                 "description": description,
                 "path": _relative_posix(path, root),
-                "score": score,
-                "snippet": snippet,
+                **scoring,
+                "snippet": _best_snippet(body, terms),
                 "sources": sources,
                 "title": title,
                 "type": fields.get("type") or "",
             }
         )
     results.sort(key=lambda item: (-item["score"], item["path"].casefold()))
+    results, suppressed = _suppress_covered_source_summaries(results)
+    candidates = results[:limit]
     return {
-        "bundle": _relative_posix(bundle, root),
-        "count": min(len(results), limit),
+        "schema_version": QUERY_PROTOCOL_SCHEMA_VERSION,
+        "mode": "discovery",
         "query": query,
-        "results": results[:limit],
-        "total": len(results),
+        "repository": _query_repository_metadata(root, bundle, config),
+        "retrieval": {
+            "algorithm_version": SEARCH_ALGORITHM_VERSION,
+            "provider": "builtin",
+            "candidate_count": len(results),
+            "returned_count": len(candidates),
+            "limit": limit,
+            "suppressed_count": suppressed,
+            "has_more_candidates": len(results) > len(candidates),
+        },
+        "candidates": candidates,
     }
+
+
+def _has_symlink_component(path: Path, root: Path) -> bool:
+    relative = path.relative_to(root)
+    current = root
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            return True
+    return False
+
+
+def _normalized_concept_ids(concept_ids: Iterable[str], *, maximum: int = 8) -> list[str]:
+    normalized: list[str] = []
+    for concept_id in concept_ids:
+        if not isinstance(concept_id, str):
+            raise ADWikiError("Concept IDs must be strings")
+        if concept_id in normalized:
+            continue
+        normalized.append(concept_id)
+    if not normalized:
+        raise ADWikiError("at least one --concept is required")
+    if len(normalized) > maximum:
+        raise ADWikiError(f"at most {maximum} Concepts may be selected")
+    return normalized
+
+
+def _read_bundle_concept(
+    bundle: Path,
+    concept_id: str,
+    *,
+    purpose: str,
+) -> tuple[Path, str, list[str], str]:
+    if (
+        not CONCEPT_ID.fullmatch(concept_id)
+        or ".." in Path(concept_id).parts
+        or concept_id.endswith(".md")
+    ):
+        raise ADWikiError(f"invalid {purpose} Concept ID: {concept_id}")
+    lexical_path = bundle / f"{concept_id}.md"
+    if _has_symlink_component(lexical_path, bundle):
+        raise ADWikiError(f"{purpose} Concept must not use a symlink: {concept_id}")
+    path = _resolve_inside(bundle, f"{concept_id}.md", f"{purpose} Concept")
+    bundle_relative = path.relative_to(bundle)
+    if (
+        path.is_symlink()
+        or not path.is_file()
+        or path.name in {"index.md", "log.md"}
+        or any(part.startswith(".") for part in bundle_relative.parts)
+    ):
+        raise ADWikiError(f"{purpose} Concept ID is not a readable Bundle Concept: {concept_id}")
+    text = path.read_text(encoding="utf-8")
+    parsed = _frontmatter(text)
+    if not parsed:
+        raise ADWikiError(f"{purpose} Concept lacks frontmatter: {concept_id}")
+    lines, body = parsed
+    return path, text, lines, body
 
 
 def build_query_context(
     repo: str | os.PathLike[str],
     *,
     query: str,
-    max_concepts: int = 8,
+    concept_ids: Iterable[str],
     max_chars: int = 30_000,
 ) -> dict[str, Any]:
-    """Build a bounded, deterministic, read-only context envelope for one Wiki query."""
-    if max_concepts < 1 or max_concepts > 100:
-        raise ADWikiError("max-concepts must be between 1 and 100")
+    """Hydrate full Markdown for explicitly selected Bundle Concepts."""
+    if not query.strip():
+        raise ADWikiError("query must be non-empty")
     if max_chars < 1 or max_chars > 1_000_000:
         raise ADWikiError("max-chars must be between 1 and 1000000")
 
     root = _repository_root(repo)
     _, bundle, config = _configured_roots(root)
     _require_supported_profile(config)
-    content_language = _content_language(config)
-    domain_config = config.get("domain")
-    if not isinstance(domain_config, dict):
-        raise ADWikiError("domain configuration must be an object")
-    domain = domain_config.get("name")
-    if not isinstance(domain, str) or not domain.strip():
-        raise ADWikiError("domain.name must be a non-empty string")
-    root_index = bundle / "index.md"
-    if root_index.is_file():
-        parsed_index = _frontmatter(root_index.read_text(encoding="utf-8"))
-        if parsed_index:
-            index_fields, _, _ = _top_level(parsed_index[0])
-            declared_okf = index_fields.get("okf_version")
-            if declared_okf and declared_okf != OKF_VERSION:
-                raise ADWikiError(
-                    f"unsupported OKF version {declared_okf}; expected {OKF_VERSION}; "
-                    "use the Migrate workflow"
-                )
-
-    search = search_repository(root, query=query, limit=max_concepts)
-    remaining_chars = max_chars
+    normalized_ids = _normalized_concept_ids(concept_ids)
     included_chars = 0
-    content_was_truncated = False
     concepts: list[dict[str, Any]] = []
-    for candidate in search["results"]:
-        path = _resolve_inside(root, candidate["path"], "query context Concept")
-        if path.is_symlink() or not path.is_file() or not _path_is_within(path, bundle):
-            raise ADWikiError("query context Concept must be a regular Bundle file")
-        full_content = path.read_text(encoding="utf-8")
-        content = full_content[:remaining_chars]
-        content_truncated = len(content) < len(full_content)
+    for concept_id in normalized_ids:
+        path, content, lines, _ = _read_bundle_concept(
+            bundle,
+            concept_id,
+            purpose="query hydration",
+        )
+        fields, _, _ = _top_level(lines)
+        sources = [
+            {key: entry[key] for key in ("id", "resource", "title") if entry.get(key)}
+            for entry in _source_entries(lines, fields.get("sources"))
+        ]
+        included_chars += len(content)
         concepts.append(
             {
-                **candidate,
+                "concept_id": concept_id,
                 "content": content,
-                "content_truncated": content_truncated,
+                "description": fields.get("description") or "",
+                "path": _relative_posix(path, root),
+                "sources": sources,
+                "title": fields.get("title") or path.stem.replace("-", " ").title(),
+                "type": fields.get("type") or "",
             }
         )
-        included_chars += len(content)
-        remaining_chars -= len(content)
-        if content_truncated or remaining_chars == 0:
-            content_was_truncated = content_truncated
-            break
-
-    included_count = len(concepts)
+    if included_chars > max_chars:
+        raise ADWikiError(
+            f"selected Concept content exceeds max-chars ({included_chars} > {max_chars}); "
+            "select fewer Concepts or raise the explicit limit"
+        )
     return {
-        "schema_version": QUERY_CONTEXT_SCHEMA_VERSION,
+        "schema_version": QUERY_PROTOCOL_SCHEMA_VERSION,
+        "mode": "hydration",
         "query": query,
-        "repository": {
-            "bundle": search["bundle"],
-            "content_language": content_language,
-            "domain": domain.strip(),
-            "okf_version": OKF_VERSION,
-            "profile_version": str(config.get("profile_version", PROFILE_VERSION)),
-        },
-        "retrieval": {
-            "provider": "builtin",
-            "candidate_count": search["total"],
-            "included_count": included_count,
+        "repository": _query_repository_metadata(root, bundle, config),
+        "hydration": {
+            "selected_count": len(normalized_ids),
+            "included_count": len(concepts),
             "included_chars": included_chars,
             "max_chars": max_chars,
-            "max_concepts": max_concepts,
-            "truncated": search["total"] > included_count or content_was_truncated,
+            "complete_pages": True,
         },
         "concepts": concepts,
+    }
+
+
+def _selected_concept_sources(
+    bundle: Path,
+    concept_ids: Iterable[str],
+) -> tuple[list[str], list[str]]:
+    normalized_ids = _normalized_concept_ids(concept_ids)
+    resources: list[str] = []
+    for concept_id in normalized_ids:
+        _, _, lines, _ = _read_bundle_concept(bundle, concept_id, purpose="Raw fallback")
+        fields, _, _ = _top_level(lines)
+        for entry in _source_entries(lines, fields.get("sources")):
+            resource = entry.get("resource")
+            if resource and resource not in resources:
+                resources.append(str(resource))
+    return normalized_ids, resources
+
+
+def _registered_records_for_resources(
+    root: Path,
+    resources: list[str],
+) -> list[dict[str, Any]]:
+    registry = _load_registry(root)
+    resource_set = set(resources)
+    latest: dict[str, dict[str, Any]] = {}
+    for record in registry["sources"]:
+        locator = str(record["canonical_locator"])
+        if locator not in resource_set:
+            continue
+        current = latest.get(locator)
+        if current is None or int(record["version"]) > int(current["version"]):
+            latest[locator] = record
+    records = [latest[resource] for resource in resources if resource in latest]
+    if not records:
+        raise ADWikiError("selected Concepts have no registered Raw sources")
+    return records
+
+
+def _read_verified_registered_source(root: Path, raw_root: Path, record: dict[str, Any]) -> str:
+    lexical_path = root / str(record["path"])
+    if _has_symlink_component(lexical_path, root):
+        raise ADWikiError(f"registered Raw source must not use a symlink: {record['path']}")
+    path = _resolve_inside(root, str(record["path"]), "registered Raw source")
+    if not _path_is_within(path, raw_root) or not path.is_file():
+        raise ADWikiError(f"registered Raw source is outside raw_root or missing: {record['path']}")
+    data = path.read_bytes()
+    if hashlib.sha256(data).hexdigest() != record["sha256"]:
+        raise ADWikiError(f"registered Raw source changed: {record['path']}")
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ADWikiError(f"registered Raw source is not UTF-8 text: {record['path']}") from exc
+
+
+def _raw_excerpt_candidates(text: str, terms: list[str]) -> list[dict[str, Any]]:
+    lines = text.splitlines()
+    headings = [index for index, line in enumerate(lines) if line.lstrip().startswith("#")]
+    ranked: list[dict[str, Any]] = []
+    for index, line in enumerate(lines):
+        counts = Counter(_search_tokens(line))
+        matched = sorted(term for term in terms if counts[term] > 0)
+        if len(matched) < _minimum_term_matches(len(terms)):
+            continue
+        previous_headings = [heading for heading in headings if heading <= index]
+        next_headings = [heading for heading in headings if heading > index]
+        section_start = previous_headings[-1] if previous_headings else max(0, index - 2)
+        section_end = next_headings[0] if next_headings else min(len(lines), index + 8)
+        if section_end - section_start > 80:
+            start = max(0, index - 3)
+            end = min(len(lines), index + 9)
+        else:
+            start = section_start
+            end = section_end
+        content = "\n".join(lines[start:end]).strip()
+        if not content:
+            continue
+        ranked.append(
+            {
+                "content": content,
+                "end_line": end,
+                "matched_terms": matched,
+                "score": 10 * len(matched) + sum(counts[term] for term in matched),
+                "start_line": start + 1,
+            }
+        )
+    ranked.sort(key=lambda item: (-item["score"], item["start_line"]))
+    selected: list[dict[str, Any]] = []
+    for candidate in ranked:
+        if any(
+            candidate["start_line"] <= existing["end_line"]
+            and existing["start_line"] <= candidate["end_line"]
+            for existing in selected
+        ):
+            continue
+        selected.append(candidate)
+        if len(selected) == 2:
+            break
+    return selected
+
+
+def query_registered_raw(
+    repo: str | os.PathLike[str],
+    *,
+    query: str,
+    concept_ids: Iterable[str],
+    max_sources: int = 2,
+    max_chars: int = 6_000,
+) -> dict[str, Any]:
+    """Build one bounded, read-only Raw fallback context from selected Concept provenance."""
+    if not query.strip():
+        raise ADWikiError("query must be non-empty")
+    if max_sources < 1 or max_sources > 5:
+        raise ADWikiError("max-sources must be between 1 and 5")
+    if max_chars < 1 or max_chars > 100_000:
+        raise ADWikiError("max-chars must be between 1 and 100000")
+    terms = _query_terms(query)
+    if not terms:
+        raise ADWikiError("query has no searchable terms")
+
+    root = _repository_root(repo)
+    raw_root, bundle, config = _configured_roots(root)
+    _require_supported_profile(config)
+    normalized_ids, resources = _selected_concept_sources(bundle, concept_ids)
+    records = _registered_records_for_resources(root, resources)
+    selected_records = records[:max_sources]
+    remaining_chars = max_chars
+    included_chars = 0
+    content_truncated = False
+    sources: list[dict[str, Any]] = []
+    for record_index, record in enumerate(selected_records):
+        text = _read_verified_registered_source(root, raw_root, record)
+        candidates = _raw_excerpt_candidates(text, terms)
+        excerpts: list[dict[str, Any]] = []
+        for candidate_index, candidate in enumerate(candidates):
+            if remaining_chars == 0:
+                content_truncated = True
+                break
+            full_content = str(candidate["content"])
+            content = full_content[:remaining_chars]
+            truncated = len(content) < len(full_content)
+            excerpts.append({**candidate, "content": content, "content_truncated": truncated})
+            included_chars += len(content)
+            remaining_chars -= len(content)
+            if truncated:
+                content_truncated = True
+                break
+        if excerpts:
+            sources.append(
+                {
+                    "canonical_locator": record["canonical_locator"],
+                    "excerpts": excerpts,
+                    "integrity": "verified",
+                    "path": record["path"],
+                    "registry_source_id": record["source_id"],
+                    "version": record["version"],
+                }
+            )
+        if remaining_chars == 0:
+            if candidate_index < len(candidates) - 1 or record_index < len(selected_records) - 1:
+                content_truncated = True
+            break
+    return {
+        "schema_version": "1",
+        "mode": "raw-fallback",
+        "query": query,
+        "concepts": normalized_ids,
+        "retrieval": {
+            "content_truncated": content_truncated,
+            "included_chars": included_chars,
+            "included_source_count": len(sources),
+            "linked_source_count": len(records),
+            "max_chars": max_chars,
+            "max_sources": max_sources,
+            "source_limit_reached": len(records) > len(selected_records),
+        },
+        "sources": sources,
     }
 
 

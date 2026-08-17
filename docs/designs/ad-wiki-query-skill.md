@@ -1,5 +1,7 @@
 # Technical Design: AD-Wiki 独立只读 Query Skill
 
+> 历史文档：本设计已由 [AD-Wiki Karpathy Query v2](ad-wiki-karpathy-query-v2.md) 取代。Plugin 2.0 不保留这里描述的自动 Top-K、前缀截断或旧 Context Envelope 接口。
+
 Design identity: `ad-wiki-query-skill-v0.4-accepted`
 
 Product Contract: `docs/product-specs/ad-wiki-repository-local-scope.md`

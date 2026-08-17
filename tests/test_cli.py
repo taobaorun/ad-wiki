@@ -176,20 +176,43 @@ Knowledge is compiled once and maintained.[^paper]
             "--query",
             "persistent compilation",
         )
-        self.assertEqual(searched["results"][0]["concept_id"], "concepts/paper")
+        self.assertEqual(searched["mode"], "discovery")
+        self.assertEqual(searched["candidates"][0]["concept_id"], "concepts/paper")
+        self.assertNotIn("content", searched["candidates"][0])
         context = self.run_cli(
             "build_query_context.py",
             "--repo",
             str(self.repo),
             "--query",
             "persistent compilation",
-            "--max-concepts",
-            "4",
+            "--concept",
+            "concepts/paper",
             "--max-chars",
             "10000",
         )
-        self.assertEqual(context["schema_version"], "1")
+        self.assertEqual(context["schema_version"], "2")
+        self.assertEqual(context["mode"], "hydration")
         self.assertEqual(context["concepts"][0]["concept_id"], "concepts/paper")
+        self.assertTrue(context["hydration"]["complete_pages"])
+        fallback = self.run_cli(
+            "query_registered_raw.py",
+            "--repo",
+            str(self.repo),
+            "--query",
+            "persistent compilation",
+            "--concept",
+            "concepts/paper",
+        )
+        self.assertEqual(fallback["mode"], "raw-fallback")
+        self.assertEqual(fallback["sources"][0]["path"], "raw/inbox/paper.md")
+        doctor = self.run_cli(
+            "doctor_plugin.py",
+            "--plugin-root",
+            str(PLUGIN_ROOT),
+            "--repo",
+            str(self.repo),
+        )
+        self.assertTrue(doctor["ready"], doctor)
         reviewed = self.run_cli(
             "review_run.py",
             "--repo",

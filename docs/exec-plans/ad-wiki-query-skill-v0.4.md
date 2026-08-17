@@ -1,5 +1,7 @@
 # Implementation Plan: AD-Wiki 独立只读 Query Skill v0.4
 
+> 历史计划：本计划已由 [AD-Wiki Karpathy Query v2](ad-wiki-karpathy-query-v2.md) 取代。Plugin 2.0 不提供这里描述的兼容入口或自动 Context 装配行为。
+
 Product Contract: `docs/product-specs/ad-wiki-repository-local-scope.md`
 
 Technical Design: `docs/designs/ad-wiki-query-skill.md`

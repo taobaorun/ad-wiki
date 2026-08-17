@@ -25,6 +25,7 @@ from ad_wiki.runtime import (  # noqa: E402
     build_query_context,
     migrate_repository,
     prepare_run,
+    query_registered_raw,
     review_run,
     search_repository,
 )
@@ -434,12 +435,114 @@ class SearchAndPolicyTests(RuntimeTestCase):
             for path in self.repo.rglob("*")
             if path.is_file()
         }
-        self.assertEqual(result["results"][0]["concept_id"], "concepts/compilation")
-        self.assertEqual(result["results"][0]["sources"][0]["id"], "source-a")
-        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["schema_version"], "2")
+        self.assertEqual(result["mode"], "discovery")
+        self.assertEqual(result["candidates"][0]["concept_id"], "concepts/compilation")
+        self.assertEqual(result["candidates"][0]["sources"][0]["id"], "source-a")
+        self.assertEqual(result["retrieval"]["algorithm_version"], "2")
+        self.assertIn("persistent", result["candidates"][0]["matched_terms"])
+        self.assertIn("body", result["candidates"][0]["matched_fields"])
+        self.assertGreater(result["candidates"][0]["term_coverage"], 0)
+        self.assertEqual(result["retrieval"]["candidate_count"], 1)
+        self.assertEqual(result["retrieval"]["returned_count"], 1)
+        self.assertNotIn("content", result["candidates"][0])
         self.assertEqual(before, after)
 
-    def test_builds_a_stable_read_only_context_envelope(self) -> None:
+    def test_search_uses_chinese_phrases_instead_of_common_single_characters(self) -> None:
+        target = self.repo / "wiki/concepts/extension-point.md"
+        target.write_text(
+            concept_text("SOFA 扩展点机制").replace(
+                "Persistent Wiki knowledge compounds across questions.",
+                "扩展点通过贡献点注册完成跨模块定制。",
+            )
+        )
+        unrelated = self.repo / "wiki/concepts/application.md"
+        unrelated.write_text(
+            concept_text("SOFA 应用基础").replace(
+                "Persistent Wiki knowledge compounds across questions.",
+                "应用框架提供模块和服务能力。",
+            )
+        )
+        build_indexes(self.repo)
+
+        result = search_repository(
+            self.repo,
+            query="SOFA4 应用扩展点的原理是什么？如何使用扩展点？",
+            limit=10,
+        )
+
+        self.assertEqual(result["candidates"][0]["concept_id"], "concepts/extension-point")
+        self.assertIn("扩展点", result["candidates"][0]["matched_terms"])
+        self.assertNotIn("的", result["candidates"][0]["matched_terms"])
+        self.assertEqual(result["retrieval"]["candidate_count"], 1)
+
+    def test_search_requires_more_than_generic_product_and_mechanism_terms(self) -> None:
+        target = self.repo / "wiki/concepts/classloading.md"
+        target.write_text(
+            concept_text("SOFA4 类加载机制").replace(
+                "Persistent Wiki knowledge compounds across questions.",
+                "类加载使用独立 ClassLoader 完成模块隔离。",
+            )
+        )
+        generic = self.repo / "wiki/concepts/generic.md"
+        generic.write_text(
+            concept_text("SOFA4 通用机制").replace(
+                "Persistent Wiki knowledge compounds across questions.",
+                "这是 SOFA4 的通用机制说明。",
+            )
+        )
+        build_indexes(self.repo)
+
+        result = search_repository(self.repo, query="SOFA4 的类加载机制如何工作？", limit=10)
+
+        self.assertEqual(
+            [item["concept_id"] for item in result["candidates"]],
+            ["concepts/classloading"],
+        )
+
+    def test_search_ignores_english_question_framing(self) -> None:
+        concept = self.repo / "wiki/concepts/persistence.md"
+        concept.write_text(concept_text("Persistent Wiki"))
+        build_indexes(self.repo)
+
+        result = search_repository(self.repo, query="What is a persistent wiki?")
+
+        self.assertEqual(
+            [item["concept_id"] for item in result["candidates"]],
+            ["concepts/persistence"],
+        )
+        self.assertEqual(result["candidates"][0]["matched_terms"], ["persistent", "wiki"])
+
+    def test_search_ignores_chinese_question_framing_and_single_characters(self) -> None:
+        concept = self.repo / "wiki/concepts/jvm-requirements.md"
+        concept.write_text(concept_text("SOFA4 JVM 要求"))
+        build_indexes(self.repo)
+
+        result = search_repository(self.repo, query="SOFA4 对 JVM 有什么要求")
+
+        self.assertEqual(
+            [item["concept_id"] for item in result["candidates"]],
+            ["concepts/jvm-requirements"],
+        )
+        self.assertEqual(result["candidates"][0]["matched_terms"], ["jvm", "sofa4", "要求"])
+
+    def test_search_suppresses_source_summary_when_answer_concept_covers_resource(self) -> None:
+        concept = self.repo / "wiki/concepts/extension-point.md"
+        concept.write_text(concept_text("Extension Point"))
+        summary = self.repo / "wiki/sources/extension-point.md"
+        summary.write_text(concept_text("Extension Point Source").replace("type: Concept", "type: Source Summary"))
+        build_indexes(self.repo)
+
+        result = search_repository(self.repo, query="extension point", limit=10)
+
+        self.assertEqual(
+            [item["concept_id"] for item in result["candidates"]],
+            ["concepts/extension-point"],
+        )
+        self.assertEqual(result["retrieval"]["suppressed_count"], 1)
+        self.assertEqual(result["retrieval"]["candidate_count"], 1)
+
+    def test_hydrates_explicit_concepts_in_caller_order_without_mutation(self) -> None:
         first = self.repo / "wiki/concepts/compilation.md"
         second = self.repo / "wiki/concepts/persistence.md"
         first.write_text(concept_text("Incremental Compilation"))
@@ -454,13 +557,13 @@ class SearchAndPolicyTests(RuntimeTestCase):
         envelope = build_query_context(
             self.repo,
             query="persistent wiki compilation",
-            max_concepts=8,
+            concept_ids=["concepts/persistence", "concepts/compilation", "concepts/persistence"],
             max_chars=30_000,
         )
         repeated = build_query_context(
             self.repo,
             query="persistent wiki compilation",
-            max_concepts=8,
+            concept_ids=["concepts/persistence", "concepts/compilation", "concepts/persistence"],
             max_chars=30_000,
         )
 
@@ -469,60 +572,84 @@ class SearchAndPolicyTests(RuntimeTestCase):
             for path in self.repo.rglob("*")
             if path.is_file()
         }
-        self.assertEqual(envelope["schema_version"], "1")
+        self.assertEqual(envelope["schema_version"], "2")
+        self.assertEqual(envelope["mode"], "hydration")
         self.assertEqual(envelope["repository"]["bundle"], "wiki")
         self.assertEqual(envelope["repository"]["content_language"], "zh-CN")
         self.assertEqual(envelope["repository"]["domain"], "research")
         self.assertEqual(envelope["repository"]["okf_version"], "0.2")
         self.assertEqual(envelope["repository"]["profile_version"], "0.1")
-        self.assertEqual(envelope["retrieval"]["candidate_count"], 2)
-        self.assertEqual(envelope["retrieval"]["included_count"], 2)
-        self.assertFalse(envelope["retrieval"]["truncated"])
+        self.assertEqual(envelope["hydration"]["selected_count"], 2)
+        self.assertEqual(envelope["hydration"]["included_count"], 2)
+        self.assertTrue(envelope["hydration"]["complete_pages"])
         self.assertEqual(envelope["concepts"][0]["concept_id"], "concepts/persistence")
         self.assertIn("# Persistent Wiki", envelope["concepts"][0]["content"])
-        self.assertFalse(envelope["concepts"][0]["content_truncated"])
+        self.assertEqual(envelope["concepts"][1]["concept_id"], "concepts/compilation")
         self.assertFalse(Path(envelope["concepts"][0]["path"]).is_absolute())
         self.assertEqual(envelope, repeated)
         self.assertEqual(before, after)
 
-    def test_query_context_enforces_deterministic_limits(self) -> None:
+    def test_discovery_score_does_not_choose_the_hydrated_knowledge_scope(self) -> None:
+        focused = self.repo / "wiki/concepts/focused.md"
+        focused.write_text(concept_text("Focused Answer"))
+        supporting = self.repo / "wiki/concepts/supporting.md"
+        supporting.write_text(
+            concept_text("Supporting Note").replace(
+                "Persistent Wiki knowledge compounds across questions.",
+                "This page mentions focused and answer separately.",
+            )
+        )
+        build_indexes(self.repo)
+
+        discovery = search_repository(self.repo, query="focused answer")
+        hydrated = build_query_context(
+            self.repo,
+            query="focused answer",
+            concept_ids=["concepts/supporting"],
+        )
+
+        self.assertEqual(discovery["candidates"][0]["concept_id"], "concepts/focused")
+        self.assertEqual(
+            [item["concept_id"] for item in hydrated["concepts"]],
+            ["concepts/supporting"],
+        )
+        self.assertNotIn("score", hydrated["concepts"][0])
+
+    def test_hydration_enforces_atomic_character_and_selection_limits(self) -> None:
         (self.repo / "wiki/concepts/compilation.md").write_text(concept_text())
         (self.repo / "wiki/concepts/persistence.md").write_text(concept_text("Persistent Wiki"))
         build_indexes(self.repo)
 
-        character_limited = build_query_context(
-            self.repo,
-            query="persistent wiki",
-            max_concepts=8,
-            max_chars=20,
-        )
-        self.assertEqual(character_limited["retrieval"]["included_chars"], 20)
-        self.assertEqual(len(character_limited["concepts"]), 1)
-        self.assertEqual(len(character_limited["concepts"][0]["content"]), 20)
-        self.assertTrue(character_limited["concepts"][0]["content_truncated"])
-        self.assertTrue(character_limited["retrieval"]["truncated"])
+        with self.assertRaisesRegex(ADWikiError, "exceeds max-chars"):
+            build_query_context(
+                self.repo,
+                query="persistent wiki",
+                concept_ids=["concepts/compilation"],
+                max_chars=20,
+            )
 
-        concept_limited = build_query_context(
-            self.repo,
-            query="persistent wiki",
-            max_concepts=1,
-            max_chars=30_000,
-        )
-        self.assertEqual(concept_limited["retrieval"]["candidate_count"], 2)
-        self.assertEqual(concept_limited["retrieval"]["included_count"], 1)
-        self.assertTrue(concept_limited["retrieval"]["truncated"])
+        many = []
+        for index in range(9):
+            concept_id = f"concepts/page-{index}"
+            (self.repo / f"wiki/{concept_id}.md").write_text(concept_text(f"Page {index}"))
+            many.append(concept_id)
+        with self.assertRaisesRegex(ADWikiError, "at most 8 Concepts"):
+            build_query_context(self.repo, query="pages", concept_ids=many)
 
     def test_query_context_rejects_out_of_range_limits(self) -> None:
-        for value in (0, 101):
-            with self.subTest(max_concepts=value):
-                with self.assertRaisesRegex(ADWikiError, "max-concepts"):
-                    build_query_context(self.repo, query="wiki", max_concepts=value)
         for value in (0, 1_000_001):
             with self.subTest(max_chars=value):
                 with self.assertRaisesRegex(ADWikiError, "max-chars"):
-                    build_query_context(self.repo, query="wiki", max_chars=value)
+                    build_query_context(
+                        self.repo,
+                        query="wiki",
+                        concept_ids=["concepts/missing"],
+                        max_chars=value,
+                    )
+        with self.assertRaisesRegex(ADWikiError, "at least one --concept"):
+            build_query_context(self.repo, query="wiki", concept_ids=[])
 
-    def test_query_context_does_not_expose_hidden_bundle_markdown(self) -> None:
+    def test_hydration_rejects_hidden_reserved_and_symlinked_bundle_markdown(self) -> None:
         hidden = self.repo / "wiki/.private/secret.md"
         hidden.parent.mkdir()
         hidden.write_text(concept_text("Secret Wiki"))
@@ -530,29 +657,194 @@ class SearchAndPolicyTests(RuntimeTestCase):
         visible.write_text(concept_text("Visible Wiki"))
         build_indexes(self.repo)
 
-        envelope = build_query_context(self.repo, query="wiki")
+        with self.assertRaisesRegex(ADWikiError, "invalid query hydration Concept ID"):
+            build_query_context(
+                self.repo,
+                query="wiki",
+                concept_ids=[".private/secret"],
+            )
+        with self.assertRaisesRegex(ADWikiError, "not a readable Bundle Concept"):
+            build_query_context(self.repo, query="wiki", concept_ids=["index"])
+        for aliased_id in ("concepts//visible", "concepts/./visible"):
+            with self.subTest(concept_id=aliased_id):
+                with self.assertRaisesRegex(ADWikiError, "invalid query hydration Concept ID"):
+                    build_query_context(self.repo, query="wiki", concept_ids=[aliased_id])
+
+        linked = self.repo / "wiki/concepts/linked.md"
+        try:
+            linked.symlink_to(visible)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlinks unavailable")
+        with self.assertRaisesRegex(ADWikiError, "must not use a symlink"):
+            build_query_context(self.repo, query="wiki", concept_ids=["concepts/linked"])
+
+        envelope = build_query_context(
+            self.repo,
+            query="wiki",
+            concept_ids=["concepts/visible"],
+        )
 
         self.assertEqual(
             [item["concept_id"] for item in envelope["concepts"]],
             ["concepts/visible"],
         )
 
-    def test_query_context_represents_no_matches_without_fallback_content(self) -> None:
+    def test_discovery_represents_no_matches_without_any_body_content(self) -> None:
         (self.repo / "wiki/concepts/compilation.md").write_text(concept_text())
         build_indexes(self.repo)
 
-        envelope = build_query_context(self.repo, query="unfindable-token")
+        catalog = search_repository(self.repo, query="unfindable-token")
 
-        self.assertEqual(envelope["retrieval"]["candidate_count"], 0)
-        self.assertEqual(envelope["retrieval"]["included_count"], 0)
-        self.assertFalse(envelope["retrieval"]["truncated"])
-        self.assertEqual(envelope["concepts"], [])
+        self.assertEqual(catalog["retrieval"]["candidate_count"], 0)
+        self.assertEqual(catalog["retrieval"]["returned_count"], 0)
+        self.assertEqual(catalog["candidates"], [])
 
-    def test_query_context_refuses_an_explicitly_unsupported_okf_version(self) -> None:
+    def test_query_protocol_refuses_an_explicitly_unsupported_okf_version(self) -> None:
+        concept = self.repo / "wiki/concepts/compilation.md"
+        concept.write_text(concept_text())
         (self.repo / "wiki/index.md").write_text('---\nokf_version: "9.9"\n---\n')
 
         with self.assertRaisesRegex(ADWikiError, "unsupported OKF version 9.9"):
-            build_query_context(self.repo, query="wiki")
+            search_repository(self.repo, query="wiki")
+        with self.assertRaisesRegex(ADWikiError, "unsupported OKF version 9.9"):
+            build_query_context(
+                self.repo,
+                query="wiki",
+                concept_ids=["concepts/compilation"],
+            )
+
+    def test_raw_fallback_reads_only_registered_sources_linked_by_selected_concepts(self) -> None:
+        source = self.register()
+        concept = self.repo / "wiki/concepts/compilation.md"
+        concept.write_text(concept_text())
+        other = self.repo / "raw/inbox/unrelated.md"
+        other.write_text("unrelated-secret-token\n")
+        register_source(self.repo, other, "urn:test:unrelated")
+        build_indexes(self.repo)
+        before = {
+            path.relative_to(self.repo).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in self.repo.rglob("*")
+            if path.is_file()
+        }
+
+        result = query_registered_raw(
+            self.repo,
+            query="persistent wiki",
+            concept_ids=["concepts/compilation"],
+            max_sources=2,
+            max_chars=6_000,
+        )
+        unrelated = query_registered_raw(
+            self.repo,
+            query="unrelated-secret-token",
+            concept_ids=["concepts/compilation"],
+            max_sources=2,
+            max_chars=6_000,
+        )
+
+        after = {
+            path.relative_to(self.repo).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in self.repo.rglob("*")
+            if path.is_file()
+        }
+        self.assertEqual(result["mode"], "raw-fallback")
+        self.assertEqual(result["concepts"], ["concepts/compilation"])
+        self.assertEqual(result["sources"][0]["path"], source.relative_to(self.repo).as_posix())
+        self.assertEqual(result["sources"][0]["integrity"], "verified")
+        self.assertIn("Persistent Wiki", result["sources"][0]["excerpts"][0]["content"])
+        self.assertEqual(unrelated["sources"], [])
+        self.assertEqual(unrelated["retrieval"]["linked_source_count"], 1)
+        self.assertEqual(before, after)
+
+    def test_raw_fallback_rejects_unregistered_or_changed_linked_sources(self) -> None:
+        concept = self.repo / "wiki/concepts/unregistered.md"
+        concept.write_text(concept_text().replace("urn:test:source-a", "urn:test:missing"))
+        build_indexes(self.repo)
+        with self.assertRaisesRegex(ADWikiError, "no registered Raw sources"):
+            query_registered_raw(
+                self.repo,
+                query="persistent wiki",
+                concept_ids=["concepts/unregistered"],
+            )
+
+        source = self.register()
+        concept.write_text(concept_text())
+        source.write_text("changed after registration\n")
+        with self.assertRaisesRegex(ADWikiError, "registered Raw source changed"):
+            query_registered_raw(
+                self.repo,
+                query="persistent wiki",
+                concept_ids=["concepts/unregistered"],
+            )
+
+    def test_raw_fallback_does_not_validate_sources_beyond_the_source_budget(self) -> None:
+        first = self.register()
+        second = self.repo / "raw/inbox/second.md"
+        second.write_text("Persistent Wiki second source.\n")
+        register_source(self.repo, second, "urn:test:source-b")
+        concept = self.repo / "wiki/concepts/bounded.md"
+        concept.write_text(
+            concept_text().replace(
+                "    resource: urn:test:source-a",
+                "    resource: urn:test:source-a\n"
+                "  - id: source-b\n"
+                "    resource: urn:test:source-b",
+            )
+        )
+        second.write_text("changed outside the selected source budget\n")
+
+        result = query_registered_raw(
+            self.repo,
+            query="persistent wiki",
+            concept_ids=["concepts/bounded"],
+            max_sources=1,
+        )
+
+        self.assertEqual(first.relative_to(self.repo).as_posix(), result["sources"][0]["path"])
+        self.assertEqual(result["retrieval"]["linked_source_count"], 2)
+        self.assertTrue(result["retrieval"]["source_limit_reached"])
+
+    def test_raw_fallback_enforces_concept_and_budget_boundaries(self) -> None:
+        self.register()
+        concept = self.repo / "wiki/concepts/compilation.md"
+        concept.write_text(concept_text())
+        build_indexes(self.repo)
+
+        with self.assertRaisesRegex(ADWikiError, "Concept ID"):
+            query_registered_raw(self.repo, query="wiki", concept_ids=["../outside"])
+        with self.assertRaisesRegex(ADWikiError, "max-sources"):
+            query_registered_raw(self.repo, query="wiki", concept_ids=["concepts/compilation"], max_sources=0)
+        with self.assertRaisesRegex(ADWikiError, "max-chars"):
+            query_registered_raw(self.repo, query="wiki", concept_ids=["concepts/compilation"], max_chars=0)
+
+        bounded = query_registered_raw(
+            self.repo,
+            query="persistent wiki",
+            concept_ids=["concepts/compilation"],
+            max_chars=12,
+        )
+        self.assertEqual(bounded["retrieval"]["included_chars"], 12)
+        self.assertTrue(bounded["retrieval"]["content_truncated"])
+
+    def test_raw_fallback_rejects_symlinked_concepts_and_sources(self) -> None:
+        source = self.register()
+        real_concept = self.repo / "wiki/concepts/real.md"
+        real_concept.write_text(concept_text())
+        linked_concept = self.repo / "wiki/concepts/linked.md"
+        try:
+            linked_concept.symlink_to(real_concept)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlinks unavailable")
+        with self.assertRaisesRegex(ADWikiError, "Concept must not use a symlink"):
+            query_registered_raw(self.repo, query="persistent wiki", concept_ids=["concepts/linked"])
+
+        linked_concept.unlink()
+        source_target = self.repo / "raw/inbox/source-target.md"
+        source_target.write_bytes(source.read_bytes())
+        source.unlink()
+        source.symlink_to(source_target)
+        with self.assertRaisesRegex(ADWikiError, "Raw source must not use a symlink"):
+            query_registered_raw(self.repo, query="persistent wiki", concept_ids=["concepts/real"])
 
     def test_lint_policy_controls_severity_and_domain_types_are_visible(self) -> None:
         config_path = self.repo / "ad-wiki.yaml"

@@ -51,23 +51,27 @@ Run `<plugin-root>/scripts/init_bundle.py --repo <repo> --domain <name> --langua
 ### Ingest
 
 1. Run `<plugin-root>/scripts/register_source.py --repo <repo> --source <path> --canonical-locator <locator> --json`.
-2. Run `<plugin-root>/scripts/build_query_context.py --repo <repo> --query <impact-terms> --json`, then read the source and relevant Concepts from the shared retrieval context.
+2. Run `<plugin-root>/scripts/search_wiki.py --repo <repo> --query <impact-terms> --limit 12 --json` and select the affected candidate Concepts semantically. When any are selected, run `<plugin-root>/scripts/build_query_context.py --repo <repo> --query <impact-terms> --concept <selected-id> [--concept <selected-id>] --json` and use only those hydrated pages for impact analysis.
 3. Choose the complete read set, write set, conflicts, and risk. Run `<plugin-root>/scripts/prepare_run.py` before writing content.
-4. Create or update the Source Summary and every affected Concept under the returned staging root, preserving each target's repository-relative path.
+4. Compile the source into retrieval-ready knowledge under the returned staging root, preserving each target's repository-relative path. A Source Summary catalogs provenance but does not replace answer-bearing Concepts. Split long FAQs, tutorials, and multi-topic sources into atomic question-, mechanism-, decision-, or entity-oriented Concepts; do not leave reusable detail behind a permanent “see Raw” pointer.
    For `zh-CN`, use the localized structures in `assets/templates/zh-CN/`; for `en`, use the templates in `assets/templates/`. Keep protocol keys and cited source text unchanged.
-5. Show the staged semantic diff. Run `<plugin-root>/scripts/approve_run.py` only from real write authority; never invent a human actor.
-6. Run `<plugin-root>/scripts/apply_run.py`. It owns the lock, drift check, live writes, indexes, log, validation, Raw guard, and rollback.
-7. Summarize the applied diff and pending review. Run `<plugin-root>/scripts/review_run.py` only after the named actor actually accepts it.
+5. Derive representative user queries from source headings and recurring questions. Ensure every important answer has an intended Concept target and avoids a Raw-only dependency.
+6. Show the staged semantic diff. Run `<plugin-root>/scripts/approve_run.py` only from real write authority; never invent a human actor.
+7. Run `<plugin-root>/scripts/apply_run.py`. It owns the lock, drift check, live writes, indexes, log, validation, Raw guard, and rollback.
+8. Before human Review, run Discovery with the representative queries and confirm the answer-bearing Concepts are clearly discoverable from title, description, snippet, and provenance. Treat repeated fallback or “details only in Raw” as compilation debt requiring a follow-up transaction rather than a normal final state.
+9. Summarize the applied diff and pending review. Run `<plugin-root>/scripts/review_run.py` only after the named actor actually accepts it.
 
 Default to one supervised source per operation. A source summary alone is not a complete ingest when existing Concepts are affected.
 
 ### Writeback
 
-Write only reusable analysis, comparisons, decisions, or knowledge gaps. First run `<plugin-root>/scripts/build_query_context.py --repo <repo> --query <impact-terms> --json` to identify affected Concepts, then use the same prepare, stage, approve, apply, and review transaction as Ingest.
+Write only reusable analysis, comparisons, decisions, or knowledge gaps. First run `<plugin-root>/scripts/search_wiki.py --repo <repo> --query <impact-terms> --limit 12 --json` to discover affected Concepts, select the relevant pages semantically, and hydrate each selected ID with `build_query_context.py --concept`. Then use the same prepare, stage, approve, apply, and review transaction as Ingest.
 
 ### Lint
 
 Run `<plugin-root>/scripts/validate_bundle.py --repo <repo> --json`. Treat `OKF-E*` and `ADW-E*` as failures and `ADW-W*` as reviewable quality findings. Default to report-only; repair only safe, unambiguous findings when explicitly allowed.
+
+Also inspect compilation quality: catch-all pages that defer reusable answers to Raw, long multi-question sources without atomic Concepts, and durable Raw fallback candidates that remain unresolved. These are semantic findings; do not invent a deterministic failure merely from a keyword match.
 
 ### Migrate
 
@@ -84,7 +88,8 @@ Run `<plugin-root>/scripts/migrate_bundle.py` to inspect the requested target. I
 - `approve_run.py`: enforce risk and configured-owner approval before apply.
 - `apply_run.py`: lock, drift-check, apply, index, log, validate, and roll back.
 - `review_run.py`: record a real post-apply semantic review.
-- `build_query_context.py`: build the shared bounded retrieval context used for maintenance impact analysis.
+- `search_wiki.py`: discover lightweight candidate Concepts for maintenance impact analysis and representative-query probes.
+- `build_query_context.py`: hydrate complete Markdown only for explicitly selected Concept IDs.
 - `migrate_bundle.py`: report current Profile state or run a packaged migration path.
 - `write_run_report.py`: legacy low-level state recorder; do not use it to bypass the transaction commands.
 

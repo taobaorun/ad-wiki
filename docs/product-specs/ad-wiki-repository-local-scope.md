@@ -28,8 +28,13 @@ Product Context: 本文同时记录当前版本的持久产品边界
 - R15 — `review.owners` 只作为高风险事务的真实 human 事前审批白名单；acceptance: 空 owner 列表不影响低风险或中风险工作流，但高风险 Apply 必须失败并给出可操作提示；非空时只有列出的 `human:<id>` 可以批准高风险事务；中风险仍由任意具名 human 完成事后 Review，不被 owner 白名单限制；owner/actor 身份由现有 Git/PR 权限系统负责，AD-Wiki 不宣称完成认证；owner/method: engineering，状态机、CLI 与策略测试；provenance: 用户于 2026-08-16 接受 owner 推荐语义。
 - R16 — Init 必须持久化团队 Wiki 的内容语言，默认 `zh-CN`，并允许显式选择 `en`；acceptance: 新仓库配置、初始化说明、Index 与 Log 使用所选语言，后续 Skill 生成的标题、摘要、正文和默认回答遵循该语言；Raw、代码、专有标识和引用原文不翻译；旧仓库缺少字段时按 `zh-CN` 解释但不自动重写已有内容；owner/method: engineering，Init、兼容、模板/Skill 与端到端测试；provenance: 用户于 2026-08-16 接受语言推荐并指定默认值 `zh-CN`。
 - R17 — 面向用户的 Wiki Query 必须由独立的只读 `ad-wiki-query` Skill 提供，`ad-wiki-maintainer` 不再暴露 Query 操作；acceptance: Plugin 同时发现两个 canonical Skill，Query Skill 不把 Prepare、Approve、Apply、Review 等写入入口呈现为可执行步骤，Maintainer 的公开路由不包含 Query；owner/method: engineering，Skill/packaging contract tests；provenance: 用户于 2026-08-16 确认针对 Query 单独创建 Skill，并接受职责边界。
-- R18 — Query Skill 与 Maintainer 必须复用同一个仓库本地 Retrieval/Context Core，而不是复制完整 Query Prompt 或建立 Skill-to-Skill 依赖；acceptance: `build_query_context.py` 对显式 `--repo` 和 query 生成稳定、带 provenance 的 JSON Context Envelope，两个 Skill 都调用该入口，任一方不需要读取另一方的 `SKILL.md`；owner/method: engineering，CLI、隔离与静态依赖测试；provenance: 用户确认“共享 Retrieval/Context Core，不共享完整 Query Contract”。
-- R19 — Query 过程必须保持只读，Context Envelope 只装配配置和相关 Concept，不自动写回或自动注入 Raw；acceptance: Query 前后目标仓库文件字节一致，Envelope 包含内容语言、领域、候选 Concept 正文、路径和 sources，并明确截断状态；有持久价值的结果只能返回 Writeback candidate，由用户确认后交给 Maintainer；owner/method: engineering，端到端 byte-diff、schema 与 Skill 行为测试；provenance: 已接受的 Query/Writeback 分离和本轮最小实现边界。
+- R18 — Query Skill 与 Maintainer 必须复用同一个仓库本地 Discovery/Hydration Core，而不是复制完整 Query Prompt 或建立 Skill-to-Skill 依赖；acceptance: `search_wiki.py` 只返回轻量候选目录，`build_query_context.py` 只加载调用者显式给出的 Concept ID，两个 Skill 复用这两个确定性入口且无需读取对方 `SKILL.md`；owner/method: engineering，CLI、隔离与静态依赖测试；provenance: 用户确认“共享 Retrieval/Context Core，不共享完整 Query Contract”，并于 2026-08-17 要求按 Karpathy 原始 LLM-Wiki 方式取消旧 Query 路径。
+- R19 — Query 过程必须保持只读并严格分为 Discovery、LLM Select、Hydration；acceptance: LLM 明确选择 Concept ID 前不向 Context 注入任何 Concept 正文，Hydration Envelope 只装配选中 Concept 的完整 Markdown、配置和 provenance，不自动写回或注入 Raw；Query 前后目标仓库文件字节一致；有持久价值的结果只能返回 Writeback candidate，由用户确认后交给 Maintainer；owner/method: engineering，端到端 byte-diff、schema 与 Skill 行为测试；provenance: 已接受的 Query/Writeback 分离及用户对 Karpathy “index first, then drill into pages”模式的确认。
+- R20 — 普通 Query 必须信任已经编译和健康检查的 Wiki Bundle，不得为每次回答重新遍历、校验或读取 Raw；acceptance: 正常命中 Concept 的 Query 只调用 Discovery/Hydration 入口，Raw fallback 命令不进入默认路径；owner/method: engineering，Skill contract 与前向测试；provenance: 用户于 2026-08-17 对 LLM-Wiki“编译一次、持续复用”原则的确认。
+- R21 — Wiki 无法充分回答、但相关 Concept 明确声明已登记来源时，可以执行一次有界、只读的 Raw fallback；acceptance: fallback 必须由相关 Concept ID 限定来源，最多读取配置上限内的已登记 Raw，校验选中文件的完整性，不扫描全部 Raw，不写回，并在回答中区分 compiled knowledge 与 raw fallback；owner/method: engineering，CLI、边界和 Skill 行为测试；provenance: 用户于 2026-08-17 接受受控 cache-miss fallback。
+- R22 — builtin Discovery 必须对中文问题提供可用区分度，但检索分数只能排序轻量候选，不能决定知识范围；acceptance: 中文检索不因常见单字使全部 Bundle 页面正分，候选目录包含 ID、标题、摘要、snippet、类型、相对路径和 provenance 且不含正文；不存在固定相关性百分比、自动 Top-K Hydration 或正文前缀截断；LLM 选择 1–8 个 Concept 后 Runtime 才原子加载完整页面，超过字符硬上限时整体失败并要求缩小选择或显式提高上限；owner/method: engineering，真实 Session 查询回放与确定性测试；provenance: `/Users/yuanxuan/Downloads/session.jsonl` 的实际查询证据及用户于 2026-08-17 对 Karpathy 原始 Query 方式的确认。
+- R23 — Query 默认回答必须简洁、可移植且仅在实质影响结论时披露检索状态；acceptance: Skill 禁止绝对路径和 `file://` 引用，使用仓库相对 Concept 路径和 source ID，普通命中不例行输出检索遥测或 Writeback candidate，同一证据上的精简/追问不重复检索；owner/method: engineering，静态契约与双宿主前向测试；provenance: 实际 Session 中 4.7k–7.8k 字符回答及用户“精简下”反馈。
+- R24 — Maintainer 必须把长 FAQ、教程和多主题来源编译成可检索、可独立回答的原子 Concept，而不是把详情永久留在 Raw；acceptance: Ingest/Lint 工作流明确把“详见 Raw”总集视为编译债务，要求代表性查询检查，Source Summary 只承担来源目录作用；owner/method: engineering，Skill contract、模板/fixture 检查与前向测试；provenance: sofa4-wiki FAQ fallback 证据和 LLM-Wiki 持久编译原则。
 
 ## In scope
 
@@ -39,6 +44,8 @@ Product Context: 本文同时记录当前版本的持久产品边界
 - 单仓库 Init、Ingest、Query、Writeback、Lint、Migrate；
 - builtin repository-local search；
 - repository-local Query Context Envelope builder；
+- 中文友好的 builtin search 与可解释的候选命中信息；
+- 由相关 Concept provenance 限定的有界 Raw fallback；
 - Raw Source 注册、哈希和不可变保护；
 - 精确 write set、baseline、审批、锁、回滚、校验、Review、Index 和 Log；
 - 可选初始化 owner、高风险 owner 门禁，以及不依赖 AD-Wiki 身份系统的具名 human 审计记录；
@@ -56,7 +63,7 @@ Product Context: 本文同时记录当前版本的持久产品边界
 - Attested Runtime、通用代码执行、数据仓库凭据、Receipt/Verdict；
 - 自动迁移所有团队仓库、自动合并 PR 或修改默认分支；
 - AD-Wiki 自建身份认证、把 actor 字符串宣称为已认证身份、自动翻译 Raw 或批量改写既有 Wiki；
-- 普通 LLM API 的 SDK Adapter、Query HTTP API、自动 Raw context 注入或 Skill-to-Skill 编排；
+- 普通 LLM API 的 SDK Adapter、Query HTTP API、无条件 Raw context 注入、全量 Raw 搜索或 Skill-to-Skill 编排；
 - 本轮没有明确要求的本地批量导入器。
 
 ## Constraints and confirmed decisions
@@ -73,15 +80,15 @@ Product Context: 本文同时记录当前版本的持久产品边界
 - 中风险事务仍需要明确写入授权和真实 `human:<id>` 事后 Review；配置 owner 不把日常 Ingest Review 集中到 owner。
 - 内容语言默认 `zh-CN`；它约束 Agent 生成的知识表达，不改变 Raw、代码、引用、稳定标识或已有文件路径。
 - `ad-wiki-query` 独占面向用户的问答与只读 Query Contract；`ad-wiki-maintainer` 只在维护流程中使用 Retrieval/Context Core 分析现有知识和影响面。
-- 两个 Skill 直接依赖同一个确定性 Context Builder，不互相调用，也不在每个团队 Wiki 中保存 Query Prompt。
-- Context Builder 默认只装配 Concept；Raw 仍由 Query Skill 在确需核实证据时按已有仓库边界单独读取。
+- 两个 Skill 直接依赖同一套确定性 Discovery/Hydration Core，不互相调用，也不在每个团队 Wiki 中保存 Query Prompt。
+- Runtime 只排序候选并加载 LLM 显式选择的 Concept，不用 score、百分比或 Top-K 代替语义判断。普通 Query 信任编译后的 Bundle；只有选中 Concept 暴露明确 provenance 的窄问题编译缺口时，Query Skill 才能通过有界 fallback 单独读取相关已登记 Raw。
 
 ## Delegated engineering defaults and boundaries
 
 - 工程可以在不改变行为契约的前提下选择本地、可逆的文件布局、Python helper、测试 fixture 和性能优化。
 - 工程可以加强当前仓库内的路径、事务、Lint、索引和安全校验，只要不引入远程依赖或新的用户可见流程。
 - 工程可以选择最小的配置字段和 CLI 参数表达 owner 与内容语言，只要保持向后兼容、错误可操作，且不把 actor 字符串提升为认证机制。
-- 工程可以定义最小、版本化的本地 Context Envelope、字符预算和确定性截断规则，只要结果带来源、保持只读并且不改变 OKF/Profile 数据格式。
+- 工程可以定义最小、版本化的 Discovery Catalog 与 Hydration Envelope；字符限制只能作为显式选择后的资源硬上限，不能作为相关性判断或静默截断规则。
 - 任何远程服务、MCP Server、App、组织身份、Connector、后台 Worker、跨仓库能力或外部计算权限都超出默认授权，必须获得新的 Product Contract。
 - 本地批量导入若未来提出，必须仍以一个目标仓库、每来源可追溯、Raw 不可变和现有事务门禁为基础，并单独确认其用户体验和自动化等级。
 

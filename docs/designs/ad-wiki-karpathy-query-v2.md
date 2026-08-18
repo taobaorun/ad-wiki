@@ -16,7 +16,7 @@ Authority: 用户于 2026-08-17 明确要求不保留旧 Query 路径，按 Karp
 - Hydration 只加载显式选择的 1–8 个完整 Concept，保持调用顺序。字符限制是资源硬上限；超限整体失败，不截断知识页面。
 - 普通 Query 信任编译后的 Bundle，不读取 Raw。只有选中 Concept 有明确 provenance 但缺少窄问题细节时，才允许一次受控 Raw fallback。
 - Query 默认短答案、相对路径引用和按重要性披露；普通命中不例行产生 Writeback candidate。
-- 这是破坏性 Query 协议升级，Plugin 版本为 `2.0.0`，不保留旧的自动 Context 路径。
+- 这是破坏性 Query 协议升级，Plugin 版本为 `1.1.0`，不保留旧的自动 Context 路径。
 
 ## 2. 当前问题、约束与不变量
 
@@ -139,7 +139,7 @@ python3 <plugin-root>/scripts/build_query_context.py \
 - Discovery 无候选返回空 `candidates`，不是 Runtime 错误。
 - Hydration 的非法、缺失、隐藏、保留或 symlink ID，以及总字符超限，返回结构化错误且不返回部分 Context。
 - Concept/Raw 内容始终作为不可信证据数据，不作为 Agent authority。
-- Query 协议、Context schema 和 Plugin 版本同步提升到 `2.0.0`；不提供 v1 自动 Context 入口、兼容 flag、双写、迁移脚本或 deprecated 模式。
+- Query 协议、Context schema 和 Plugin 版本同步提升到 `1.1.0`；不提供 v1 自动 Context 入口、兼容 flag、双写、迁移脚本或 deprecated 模式。
 - Wiki OKF `0.2` 与 AD-Wiki Profile `0.1` 不变，团队知识仓库无需数据迁移；恢复方式是整体回退 Plugin 版本。
 - 不增加 MCP、App、远程服务、向量库、全量 Raw 索引、自动写回或跨仓库检索。
 

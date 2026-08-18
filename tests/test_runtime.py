@@ -287,6 +287,30 @@ class TransactionTests(RuntimeTestCase):
         self.assertTrue(log.startswith("# 知识包更新日志"))
         self.assertIn("已应用 1 个计划知识文件", log)
 
+    def test_transaction_log_matches_run_ids_exactly(self) -> None:
+        longer = self.prepare(
+            "run-log4j2",
+            risk="low",
+            target="wiki/concepts/log4j2.md",
+        )
+        longer.write_text(concept_text("Log4j2"))
+        approve_run(self.repo, run_id="run-log4j2")
+        apply_run(self.repo, run_id="run-log4j2")
+
+        shorter = self.prepare(
+            "run-log",
+            risk="low",
+            target="wiki/concepts/logging.md",
+        )
+        shorter.write_text(concept_text("Log"))
+        approve_run(self.repo, run_id="run-log")
+        applied = apply_run(self.repo, run_id="run-log")
+
+        log = (self.repo / "wiki/log.md").read_text()
+        self.assertEqual(applied["status"], "VALIDATED")
+        self.assertEqual(log.count("`run-log4j2`"), 1)
+        self.assertEqual(log.count("`run-log`"), 1)
+
     def test_english_repository_keeps_deterministic_indexes_and_log_in_english(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory).resolve()

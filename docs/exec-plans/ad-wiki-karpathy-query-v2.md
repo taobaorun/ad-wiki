@@ -10,7 +10,7 @@ Commit policy / authority: none；用户授权本地实现，未授权 commit、
 
 ## Implementation decisions
 
-- 将现有未发布的 Query Quality 分支直接修订为破坏性的 `2.0.0`，不保留 v1 自动 Context API、兼容 flag 或迁移代码。
+- 将现有未发布的 Query Quality 分支直接修订为破坏性的 `1.1.0`，不保留 v1 自动 Context API、兼容 flag 或迁移代码。
 - 保留 dependency-free、repository-local Python Runtime；Discovery 复用中文 Search v2 排序，Hydration 使用显式 Concept ID。
 - 字符限制在读取所有选中页面后原子判断，超限失败而不截断正文。
 - 真实 Session 仅作为只读回放证据，不复制 sofa4 内容进发行仓库。
@@ -19,7 +19,7 @@ Commit policy / authority: none；用户授权本地实现，未授权 commit、
 
 - 删除 70% adaptive selection、`top-k` 模式和 query-only Context Builder 行为。
 - `search_wiki.py` 变为 Discovery Catalog v2；`build_query_context.py` 变为必需 `--concept` 的 Hydration Envelope v2。
-- Plugin 和模板版本提升到 `2.0.0`；OKF/Profile 数据版本不变。
+- Plugin 和模板版本提升到 `1.1.0`；OKF/Profile 数据版本不变。
 
 ## Implementation units
 
@@ -46,7 +46,7 @@ Commit policy / authority: none；用户授权本地实现，未授权 commit、
 - Requirements: R10-R14、R17-R24
 - Dependencies and accepted-design pointers: U1-U2 schema；design §7-8
 - Affected modules and mutation: Query Skill/Contract、Maintainer Skill/workflows、doctor、Manifest、模板、packaging tests
-- Entry / exit conditions: 两个 Skill 只呈现唯一两阶段路径；无旧命令语义或 70% 规则；所有发行身份为 2.0.0。
+- Entry / exit conditions: 两个 Skill 只呈现唯一两阶段路径；无旧命令语义或 70% 规则；所有发行身份为 1.1.0。
 - Focused verification: 静态 contract tests、Plugin doctor、Claude validator。
 - Recovery checkpoint: Skill/Manifest 改动可与 Runtime v2 一起整体回退至已发布 v1.0.0。
 
@@ -80,5 +80,5 @@ Commit policy / authority: none；用户授权本地实现，未授权 commit、
 - LLM 选择前没有正文，Runtime 不依据 score 决定知识范围。
 - Hydration 返回完整选中页面且字符超限原子失败。
 - 普通 Query 不读 Raw；fallback 仍由已选 Concept provenance 限定。
-- 两个 Skill、Runtime、Manifest、模板和测试一致为 2.0.0。
+- 两个 Skill、Runtime、Manifest、模板和测试一致为 1.1.0。
 - 完整验证与代码审查无阻断项；原工作树不被修改，且没有 commit、push、PR 或发布。

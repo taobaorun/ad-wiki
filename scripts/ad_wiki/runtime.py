@@ -501,7 +501,7 @@ def _prepend_log(
 ) -> None:
     log_title = "知识包更新日志" if content_language == "zh-CN" else "Knowledge Bundle Update Log"
     text = log_path.read_text(encoding="utf-8") if log_path.exists() else f"# {log_title}\n"
-    if run_id in text:
+    if f"`{run_id}`" in text:
         raise ADWikiError(f"log already contains run id: {run_id}")
     day = _utc_now()[:10]
     heading = f"## {day}"

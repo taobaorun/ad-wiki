@@ -1,5 +1,7 @@
 # Technical Design: AD-Wiki Owner 门禁与内容语言
 
+> 历史文档：Owner/前置审批部分已被 v1.2 直接 Apply 合同取代；内容语言设计继续有效。当前行为见 [AD-Wiki 模型直读导航 v1.2](ad-wiki-model-navigation-v1.2.md) 和 Product Contract R15-R16。
+
 Design identity: `ad-wiki-review-language-policy-v0.3-accepted`
 
 Product Contract: `docs/product-specs/ad-wiki-repository-local-scope.md`

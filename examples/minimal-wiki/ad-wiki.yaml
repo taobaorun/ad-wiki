@@ -25,14 +25,5 @@
     "stale_content": "warning"
   },
   "profile_version": "0.1",
-  "raw_root": "raw",
-  "review": {
-    "high_risk": "pre_apply",
-    "medium_risk": "post_apply",
-    "owners": []
-  },
-  "search": {
-    "mcp_threshold_pages": 1000,
-    "provider": "builtin"
-  }
+  "raw_root": "raw"
 }

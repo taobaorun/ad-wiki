@@ -51,9 +51,9 @@ class InitializeRepositoryTests(RepositoryTestCase):
         self.assertEqual(config["bundle_root"], "wiki")
         self.assertEqual(config["domain"]["name"], "architecture-decisions")
         self.assertEqual(config["content_language"], "zh-CN")
-        self.assertEqual(config["review"]["owners"], [])
-        self.assertEqual(len(result["warnings"]), 1)
-        self.assertIn("高风险", result["warnings"][0])
+        self.assertNotIn("review", config)
+        self.assertNotIn("search", config)
+        self.assertEqual(result["warnings"], [])
 
         index = (self.repo / "wiki/index.md").read_text()
         self.assertIn('okf_version: "0.2"', index)
@@ -61,7 +61,7 @@ class InitializeRepositoryTests(RepositoryTestCase):
         self.assertTrue((self.repo / "wiki/log.md").read_text().startswith("# 知识包更新日志"))
         self.assertIn("# 领域配置", (self.repo / ".ad-wiki/domain.md").read_text())
 
-    def test_supports_explicit_english_and_initial_human_owners(self) -> None:
+    def test_supports_explicit_english_and_ignores_legacy_human_owners(self) -> None:
         result = initialize_repository(
             self.repo,
             domain="research",
@@ -71,8 +71,10 @@ class InitializeRepositoryTests(RepositoryTestCase):
 
         config = json.loads((self.repo / "ad-wiki.yaml").read_text())
         self.assertEqual(config["content_language"], "en")
-        self.assertEqual(config["review"]["owners"], ["human:alice", "human:bob"])
-        self.assertEqual(result["warnings"], [])
+        self.assertNotIn("review", config)
+        self.assertNotIn("search", config)
+        self.assertEqual(len(result["warnings"]), 1)
+        self.assertIn("deprecated", result["warnings"][0])
         self.assertIn("# Domain Overlay", (self.repo / ".ad-wiki/domain.md").read_text())
         self.assertIn("# Knowledge Bundle Index", (self.repo / "wiki/index.md").read_text())
         self.assertTrue((self.repo / "wiki/log.md").read_text().startswith("# Knowledge Bundle Update Log"))
@@ -103,6 +105,24 @@ class InitializeRepositoryTests(RepositoryTestCase):
         config_path.write_text("user-owned\n")
         with self.assertRaisesRegex(ADWikiError, "refusing to overwrite"):
             self.init_repo()
+
+    def test_init_accepts_legacy_review_and_search_config_without_rewriting_it(self) -> None:
+        self.init_repo()
+        config_path = self.repo / "ad-wiki.yaml"
+        config = json.loads(config_path.read_text())
+        config["review"] = {
+            "high_risk": "pre_apply",
+            "medium_risk": "post_apply",
+            "owners": [],
+        }
+        config["search"] = {"provider": "builtin", "mcp_threshold_pages": 1000}
+        config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+        before = config_path.read_bytes()
+
+        result = self.init_repo()
+
+        self.assertEqual(result["status"], "unchanged")
+        self.assertEqual(config_path.read_bytes(), before)
 
     def test_preflights_file_conflicts_before_creating_directories(self) -> None:
         (self.repo / "ad-wiki.yaml").write_text("user-owned\n")
@@ -455,15 +475,50 @@ verified:
         config = json.loads(config_path.read_text())
         config["lint"]["broken_links"] = "sometimes"
         config["ingest"]["max_batch_size"] = 0
-        config["review"]["owners"] = ["process:ad-wiki"]
-        config["search"]["provider"] = "uninstalled-mcp"
+        config["review"] = "invalid"
+        config["search"] = "invalid"
         config_path.write_text(json.dumps(config))
 
         report = validate_repository(self.repo, today=date(2026, 8, 15))
         codes = [item["code"] for item in report["errors"]]
         self.assertIn("ADW-E107", codes)
         self.assertGreaterEqual(codes.count("ADW-E109"), 3)
-        self.assertTrue(any("human:<id>" in item["message"] for item in report["errors"]))
+
+    def test_tolerates_legacy_review_and_search_mappings_without_enforcing_them(self) -> None:
+        config_path = self.repo / "ad-wiki.yaml"
+        config = json.loads(config_path.read_text())
+        config["review"] = {
+            "high_risk": "pre_apply",
+            "medium_risk": "post_apply",
+            "owners": ["human:legacy-owner"],
+        }
+        config["search"] = {"provider": "builtin", "mcp_threshold_pages": 1000}
+        config_path.write_text(json.dumps(config))
+
+        self.assertTrue(validate_repository(self.repo, today=date(2026, 8, 15))["ok"])
+
+    def test_reports_partial_source_coverage_and_unsupported_wikilinks(self) -> None:
+        self.write_concept(
+            "sources/partial.md",
+            """---
+type: Source Summary
+title: Partial source
+coverage: partial
+sources:
+  - id: source-a
+    resource: urn:test:source-a
+---
+
+# Partial source
+
+See [[missing-concept]].
+""",
+        )
+
+        report = validate_repository(self.repo, today=date(2026, 8, 15))
+        warning_codes = {item["code"] for item in report["warnings"]}
+        self.assertIn("ADW-W211", warning_codes)
+        self.assertIn("ADW-W260", warning_codes)
 
 
 class RunReportTests(RepositoryTestCase):
@@ -487,18 +542,18 @@ class RunReportTests(RepositoryTestCase):
             self.repo,
             run_id="run-20260815-001",
             operation="ingest",
-            state="APPROVED",
+            state="APPLIED",
             risk="medium",
             inputs=["raw/inbox/source.md"],
             read_set=["wiki/index.md"],
             write_set=["wiki/sources/source.md"],
-            validations=[{"name": "plan-review", "status": "passed"}],
+            validations=[{"name": "apply", "status": "passed"}],
         )
 
         self.assertEqual(created["status"], "PLANNED")
-        self.assertEqual(advanced["status"], "APPROVED")
+        self.assertEqual(advanced["status"], "APPLIED")
         stored = json.loads((self.repo / ".ad-wiki/runs/run-20260815-001/run.json").read_text())
-        self.assertEqual(stored["status"], "APPROVED")
+        self.assertEqual(stored["status"], "APPLIED")
 
         with self.assertRaisesRegex(ADWikiError, "invalid state transition"):
             write_run_report(

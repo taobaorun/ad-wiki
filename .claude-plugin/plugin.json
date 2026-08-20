@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "ad-wiki",
   "displayName": "AD Wiki",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Query and maintain independent team knowledge repositories as continuously compiled OKF bundles.",
   "author": {
     "name": "AD Wiki Team"

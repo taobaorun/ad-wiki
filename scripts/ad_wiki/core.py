@@ -11,7 +11,7 @@ from typing import Any, Iterable
 from urllib.parse import unquote
 
 
-PLUGIN_VERSION = "1.1.0"
+PLUGIN_VERSION = "1.2.0"
 PROFILE_VERSION = "0.1"
 OKF_VERSION = "0.2"
 
@@ -47,8 +47,8 @@ ALLOWED_STATES = {
 STATE_TRANSITIONS = {
     "DISCOVERED": {"PREFLIGHTED", "FAILED"},
     "PREFLIGHTED": {"PLANNED", "FAILED"},
-    "PLANNED": {"APPROVED", "AUTO_APPROVED", "REVIEW_REQUIRED", "FAILED"},
-    "REVIEW_REQUIRED": {"APPROVED", "FAILED"},
+    "PLANNED": {"APPLIED", "APPROVED", "AUTO_APPROVED", "REVIEW_REQUIRED", "FAILED"},
+    "REVIEW_REQUIRED": {"APPLIED", "APPROVED", "FAILED"},
     "APPROVED": {"APPLIED", "FAILED"},
     "AUTO_APPROVED": {"APPLIED", "FAILED"},
     "APPLIED": {"VALIDATED", "FAILED"},
@@ -61,6 +61,7 @@ STATE_TRANSITIONS = {
 TOP_LEVEL_KEY = re.compile(r"^([A-Za-z_][A-Za-z0-9_-]*):(?:[ \t]*(.*))?$")
 RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 MARKDOWN_LINK = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")
+WIKILINK = re.compile(r"\[\[([^\]\n]+)\]\]")
 FOOTNOTE = re.compile(r"\[\^([^\]]+)\]")
 HUMAN_ACTOR = re.compile(r"human:[^\s:]+")
 
@@ -189,7 +190,7 @@ def _normalize_owners(owners: Iterable[str] | None) -> list[str]:
     return sorted(set(values))
 
 
-def _default_config(domain: str, content_language: str, owners: list[str]) -> dict[str, Any]:
+def _default_config(domain: str, content_language: str) -> dict[str, Any]:
     return {
         "bundle_root": "wiki",
         "content_language": content_language,
@@ -214,8 +215,6 @@ def _default_config(domain: str, content_language: str, owners: list[str]) -> di
         },
         "profile_version": PROFILE_VERSION,
         "raw_root": "raw",
-        "review": {"high_risk": "pre_apply", "medium_risk": "post_apply", "owners": owners},
-        "search": {"mcp_threshold_pages": 1000, "provider": "builtin"},
     }
 
 
@@ -248,8 +247,9 @@ def initialize_repository(
     root.mkdir(parents=True, exist_ok=True)
 
     created: list[str] = []
+    default_config = _default_config(domain.strip(), content_language)
     config_text = json.dumps(
-        _default_config(domain.strip(), content_language, normalized_owners),
+        default_config,
         ensure_ascii=False,
         indent=2,
         sort_keys=True,
@@ -273,10 +273,32 @@ def initialize_repository(
         candidate = root / relative
         if candidate.is_symlink() or not _path_is_within(candidate.resolve(), root):
             raise ADWikiError(f"initialization path escapes repository or uses a symlink: {relative}")
+    compatible_existing: set[str] = set()
     for relative, content in files.items():
         path = root / relative
-        if path.exists() and (not path.is_file() or path.read_text(encoding="utf-8") != content):
+        if not path.exists():
+            continue
+        if not path.is_file():
             raise ADWikiError(f"refusing to overwrite non-identical file: {relative}")
+        existing_text = path.read_text(encoding="utf-8")
+        if existing_text == content:
+            compatible_existing.add(relative)
+            continue
+        if relative == "ad-wiki.yaml":
+            try:
+                existing_config = json.loads(existing_text)
+            except json.JSONDecodeError:
+                existing_config = None
+            if isinstance(existing_config, dict):
+                legacy_config = dict(existing_config)
+                legacy_review = legacy_config.pop("review", None)
+                legacy_search = legacy_config.pop("search", None)
+                review_compatible = legacy_review is None or isinstance(legacy_review, dict)
+                search_compatible = legacy_search is None or isinstance(legacy_search, dict)
+                if review_compatible and search_compatible and legacy_config == default_config:
+                    compatible_existing.add(relative)
+                    continue
+        raise ADWikiError(f"refusing to overwrite non-identical file: {relative}")
 
     directories = [
         "raw/inbox",
@@ -293,14 +315,16 @@ def initialize_repository(
         (root / relative).mkdir(parents=True, exist_ok=True)
 
     for relative, content in files.items():
+        if relative in compatible_existing:
+            continue
         _write_new_or_equal(root / relative, content, created, root)
 
     warnings = []
-    if not normalized_owners:
+    if normalized_owners:
         warnings.append(
-            "尚未配置 review.owners；高风险事务已禁用，请在 ad-wiki.yaml 中添加 human:<id>。"
+            "--owner 已弃用并被忽略；AD-Wiki 不再使用前置审批。"
             if content_language == "zh-CN"
-            else "review.owners is empty; high-risk transactions are disabled until ad-wiki.yaml lists a human:<id>."
+            else "--owner is deprecated and ignored; AD-Wiki no longer uses pre-apply approval."
         )
     return {
         "created": sorted(created),
@@ -846,29 +870,12 @@ def validate_repository(repo: str | os.PathLike[str], today: date | None = None)
             )
         )
 
-    review_config = config.get("review", {})
-    if not isinstance(review_config, dict):
+    review_config = config.get("review")
+    if review_config is not None and not isinstance(review_config, dict):
         errors.append(_issue("ADW-E109", "review configuration must be a mapping", "ad-wiki.yaml"))
-    else:
-        if review_config.get("medium_risk", "post_apply") != "post_apply":
-            errors.append(_issue("ADW-E109", "review.medium_risk must be post_apply", "ad-wiki.yaml"))
-        if review_config.get("high_risk", "pre_apply") != "pre_apply":
-            errors.append(_issue("ADW-E109", "review.high_risk must be pre_apply", "ad-wiki.yaml"))
-        owners = review_config.get("owners", [])
-        if not isinstance(owners, list) or not all(
-            isinstance(item, str) and HUMAN_ACTOR.fullmatch(item) for item in owners
-        ):
-            errors.append(_issue("ADW-E109", "review.owners must be a list of human:<id> values", "ad-wiki.yaml"))
-
-    search_config = config.get("search", {})
-    if not isinstance(search_config, dict):
+    search_config = config.get("search")
+    if search_config is not None and not isinstance(search_config, dict):
         errors.append(_issue("ADW-E109", "search configuration must be a mapping", "ad-wiki.yaml"))
-    else:
-        if search_config.get("provider", "builtin") != "builtin":
-            errors.append(_issue("ADW-E109", "MVP search.provider must be builtin", "ad-wiki.yaml"))
-        threshold = search_config.get("mcp_threshold_pages", 1000)
-        if type(threshold) is not int or threshold < 1:
-            errors.append(_issue("ADW-E109", "search.mcp_threshold_pages must be positive", "ad-wiki.yaml"))
     if not raw_root.is_dir():
         errors.append(_issue("ADW-E100", "raw_root must be an existing directory", _relative_posix(raw_root, root)))
     if not bundle.is_dir():
@@ -928,6 +935,25 @@ def validate_repository(repo: str | os.PathLike[str], today: date | None = None)
         status = fields.get("status")
         if status and status not in ALLOWED_STATUS:
             errors.append(_issue("ADW-E101", f"unsupported lifecycle status: {status}", relative))
+
+        coverage = fields.get("coverage")
+        if fields.get("type") == "Source Summary" and coverage:
+            if coverage not in {"full", "partial"}:
+                errors.append(
+                    _issue(
+                        "ADW-E113",
+                        "Source Summary coverage must be full or partial",
+                        relative,
+                    )
+                )
+            elif coverage == "partial":
+                warnings.append(
+                    _issue(
+                        "ADW-W260",
+                        "Source Summary covers only part of its registered source",
+                        relative,
+                    )
+                )
 
         generated = fields.get("generated")
         if "generated" in fields:
@@ -1001,6 +1027,16 @@ def validate_repository(repo: str | os.PathLike[str], today: date | None = None)
                                 relative,
                             )
                         )
+
+        for raw_wikilink in WIKILINK.findall(body):
+            _append_policy_finding(
+                errors,
+                warnings,
+                lint_severities["broken_links"],
+                "ADW-W211",
+                f"unsupported Wiki link syntax: [[{raw_wikilink}]]; use a Markdown Bundle link",
+                relative,
+            )
 
         for raw_link in MARKDOWN_LINK.findall(body):
             target_text = _local_link_target(raw_link)

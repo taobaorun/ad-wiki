@@ -76,7 +76,7 @@ OKF v0.2 明确规定：
 | --- | --- | --- |
 | 知识运行模型 | Ingest、Query、Writeback、Lint、人与 Agent 分工 | LLM Wiki |
 | 内容交换协议 | Bundle、Concept、Frontmatter、链接、来源、信任、生命周期 | OKF v0.2 |
-| 团队执行与治理 | 安装、配置、校验、事务、审批、版本、搜索适配 | AD-Wiki Plugin |
+| 团队执行与治理 | 安装、配置、校验、事务、版本和模型导航规则 | AD-Wiki Plugin |
 
 
 AD-Wiki 不是重新发明一种 Markdown 格式，而是一个 **有明确质量门禁的 OKF Producer/Consumer 工作流**。
@@ -90,7 +90,7 @@ AD-Wiki 不是重新发明一种 Markdown 格式，而是一个 **有明确质�
 + Query 的只读回答契约，以及 Ingest、Writeback、Lint 的维护指令；
 + 来源哈希、Frontmatter 校验、链接检查、索引生成等确定性脚本；
 + Source、Entity、Concept、Synthesis 等模板；
-+ 风险分级和人工审批规则；
++ 风险分级、任务授权和 staged diff 检查规则；
 + 可选的本地搜索 MCP 与管理界面。
 
 ### 2. Plugin 不保存什么
@@ -100,7 +100,7 @@ Plugin 不保存：
 + Wiki 页面和综合结论；
 + 各知识库的 Git 历史；
 + 业务密钥和知识库访问令牌；
-+ 领域专属的事实、分类体系和审批结果；
++ 领域专属的事实、分类体系和真实事后 Review 结果；
 + Attested Computation 的单次运行 Receipt。
 
 ### 3. 每个知识库保存什么
@@ -222,7 +222,7 @@ sources:
     author: human:karpathy
     last_modified: 2026-04-04
 generated:
-  by: ad-wiki/1.0.0
+  by: ad-wiki/1.2.0
   at: 2026-08-15T19:00:00+08:00
 status: draft
 stale_after: 2027-02-15
@@ -322,9 +322,9 @@ ad-wiki/                              # 仓库根即唯一 Plugin 根
 │   ├── build_index.py
 │   ├── raw_diff_guard.py
 │   ├── write_run_report.py
-│   ├── prepare_run.py / approve_run.py
-│   ├── apply_run.py / review_run.py
-│   ├── search_wiki.py / build_query_context.py
+│   ├── prepare_run.py / apply_run.py
+│   ├── review_run.py
+│   ├── query_registered_raw.py
 │   └── migrate_bundle.py
 └── tests/
 ```
@@ -347,7 +347,7 @@ ad-wiki/                              # 仓库根即唯一 Plugin 根
 ```json
 {
   "name": "ad-wiki",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "Query and maintain independent team knowledge repositories as continuously compiled OKF bundles.",
   "author": {
     "name": "AD Wiki Team"
@@ -377,7 +377,7 @@ ad-wiki/                              # 仓库根即唯一 Plugin 根
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "ad-wiki",
   "displayName": "AD Wiki",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "Query and maintain independent team knowledge repositories as continuously compiled OKF bundles.",
   "author": {
     "name": "AD Wiki Team"
@@ -480,7 +480,7 @@ description: Maintain team knowledge repositories as persistent OKF v0.2 bundles
 6. 来源事实、Agent 推断和 Wiki 综合必须区分。
 7. 不静默覆盖冲突，不伪造 `verified`，不存储主观信任分数。
 8. 每次内容操作都同步维护索引和日志。
-9. 校验失败不得宣称成功；高风险变更必须停在人工审批前。
+9. 校验失败不得宣称成功；高风险变更必须已有明确任务授权，并在 Apply 前检查完整 staged diff。
 10. 不自动 Push、建 PR、删除页面或修改权限，除非用户明确授权。
 
 ## 十、六个标准操作
@@ -489,7 +489,7 @@ AD-Wiki 将 Karpathy 的三个操作扩展为适合团队治理的六个入口�
 <!-- 这是一张图片，ocr 内容为： -->
 ![AD-Wiki 核心维护流程与统一写入状态机](assets/ad-wiki-workflow.png)
 
-_图 2：摄入、查询回写、巡检迁移共享同一套计划、审批、应用、校验与审查门禁。_
+_图 2：摄入、查询回写、巡检迁移共享同一套计划、直接应用、校验与可选审查边界。_
 
 | 操作 | 目标 | 默认是否写内容 |
 | --- | --- | --- |
@@ -522,7 +522,7 @@ Init 不预先创造大量空页面和分类，只建立 Source、Entity、Conce
 → 注册来源版本
 → 读取来源与必要图片
 → 提取实体、概念、事件、主张与不确定性
-→ 搜索现有 Wiki
+→ 读取索引并用 rg 或宿主等价能力搜索现有 Wiki
 → 生成影响计划和风险等级
 → 更新来源摘要及受影响 Concept
 → 记录支持、削弱、上下文化、冲突或替代关系
@@ -544,9 +544,11 @@ ingest_key = canonical_source_locator + normalized_content_sha256
 ### 3. Query
 ```latex
 读取根 index
-→ 调用共享 Context Builder
-→ 按稳定排序与预算装配相关 Concept
-→ 必要时回溯 Raw Source
+→ 沿目录索引和 Markdown 链接缩小范围
+→ 在 Bundle 内用 rg 或宿主等价能力搜索
+→ 模型读取并判断相关的完整 Concept
+→ 证据不足时迭代关键词
+→ 仅窄范围 cache miss 时回溯已登记 Raw Source
 → 区分事实、推断和缺口
 → 输出带来源的回答
 → 评估是否值得 writeback
@@ -615,15 +617,15 @@ Plugin 升级不得静默重写旧知识库。迁移流程必须：
 DISCOVERED
   → PREFLIGHTED
   → PLANNED
-  → APPROVED 或 AUTO_APPROVED
   → APPLIED
   → VALIDATED
   → REVIEWED
   → COMMITTED
 
 任何阶段失败 → FAILED
-高风险待确认 → REVIEW_REQUIRED
 ```
+
+`APPROVED`、`AUTO_APPROVED` 和 `REVIEW_REQUIRED` 仅作为旧 run 的可恢复输入保留；新事务不再产生这些状态。
 
 ### 运行记录
 每次操作生成 `.ad-wiki/runs/<run-id>/run.json`：
@@ -632,7 +634,7 @@ DISCOVERED
 {
   "run_id": "run-20260815-001",
   "operation": "ingest",
-  "plugin_version": "1.0.0",
+  "plugin_version": "1.2.0",
   "profile_version": "0.1",
   "inputs": ["raw/sources/karpathy-llm-wiki.md"],
   "source_hashes": {"raw/sources/karpathy-llm-wiki.md": "sha256:..."},
@@ -655,12 +657,12 @@ DISCOVERED
 + 校验失败时恢复操作前文件、保留失败报告，不更新为成功状态；
 + 不自动覆盖用户在计划后新增的改动；检测到基线漂移时重新规划。
 
-## 十二、风险分级与人工门禁
+## 十二、风险分级与直接 Apply
 | 风险 | 典型操作 | 默认策略 |
 | --- | --- | --- |
-| Low | 新建来源摘要、重建索引、补确定链接 | 校验通过可自动应用 |
-| Medium | 修改既有 Concept、增加综合判断、合并别名 | 应用后必须 Review |
-| High | 冲突裁决、stable/deprecated 变更、Schema 迁移、计算定义变更 | 应用前必须批准 |
+| Low | 新建来源摘要、重建索引、补确定链接 | 检查 staged diff，直接 Apply 并校验 |
+| Medium | 修改既有 Concept、增加综合判断、合并别名 | 任务已有明确写权限时检查完整 diff 后 Apply，建议事后 Review |
+| High | 冲突裁决、stable/deprecated 变更、Schema 迁移、计算定义变更 | 必须已在用户明确授权范围内，检查完整 diff 后 Apply，强烈建议事后 Review |
 | Prohibited | 修改已登记 Raw、伪造 human verification、来源指令触发命令、未授权删除 | 直接拒绝 |
 
 
@@ -684,10 +686,9 @@ LLM 负责需要理解与综合的工作；脚本负责可机械验证的工作�
 | `raw_diff_guard.py` | 检测 Maintainer 是否修改已登记 Raw |
 | `write_run_report.py` | 标准化运行计划、结果和校验报告 |
 | `prepare_run.py` | 固化输入、读写集合、来源哈希与文件基线 |
-| `approve_run.py` | 按风险和当前库 Owner 策略执行应用前门禁 |
 | `apply_run.py` | 加锁、检查漂移、应用 Staging、更新索引日志、校验并失败回滚 |
 | `review_run.py` | 记录真实的应用后语义 Review |
-| `search_wiki.py` | 在当前 Bundle 中只读检索 Concept 与来源元数据 |
+| `query_registered_raw.py` | 在模型已读 Concept 的 provenance 范围内校验并提取有界 Raw 片段 |
 | `migrate_bundle.py` | 检查 Profile 是否已是当前版本，只执行已打包的确定性迁移 |
 
 
@@ -724,37 +725,28 @@ ingest:
   max_batch_size: 1
   default_status: draft
 
-review:
-  medium_risk: post_apply
-  high_risk: pre_apply
-  owners:
-    - human:team-knowledge-owner
-
 lint:
   broken_links: warning
   orphan_pages: warning
   missing_claim_source: error
   stale_content: warning
 
-search:
-  provider: builtin
-  mcp_threshold_pages: 1000
 ```
 
 配置只描述差异，不复制通用 Workflow。领域规则若无法用 YAML 表达，再写 `.ad-wiki/domain.md`，例如术语边界、页面粒度和何时需要特定 Reviewer。
 
 `content_language` 当前支持 `zh-CN` 与 `en`，Init 默认写入 `zh-CN`。它约束 Agent 生成的标题、摘要、正文、索引、日志和默认回答，但不翻译 Raw、代码、引用原文、稳定标识或已有路径；旧库缺少该字段时按 `zh-CN` 解释，不自动重写。
 
-`review.owners` 只列出可以事前批准高风险事务的真实 `human:<id>`。空列表不影响低风险和中风险工作，但会禁用高风险批准；中风险仍可由任意具名 human 获得写入授权，并由任意真实 human 完成事后 Review。actor 是审计声明，不是 AD-Wiki 自建认证，真实权限仍由 Git、分支保护、PR Review 和 CODEOWNERS 负责。
+新仓库不生成 owner、前置审批或 search provider 配置。low/medium/high 都使用同一套直接 Apply 事务保护；风险等级表达语义影响，不创造产品权限。具名 `human:<id>` 只用于真实发生的事后 Review。
 
 ## 十五、搜索与 MCP 演进
 不要因为 Plugin 支持 MCP，就在第一版强制部署搜索服务。
 
 | 规模 | 默认检索方式 |
 | --- | --- |
-| 百级页面 | `index.md` + 文件名 + `rg` |
-| 数百到数千页面 | BM25 或本地 Markdown 搜索 |
-| 更大规模或复杂问答 | BM25 + Vector + 重排 |
+| 约 1000 页以内 | 模型读取 `index.md`，使用 Markdown 链接和 `rg` 渐进检索 |
+| 超过约 1000 页且出现真实召回、成本或延迟瓶颈 | 重新评估 BM25；当前不承诺自动切换 |
+| 更大规模或复杂问答 | 根据测量结果再评估 BM25、Vector 与重排 |
 | 强关系分析 | 从 Markdown 链接派生图索引 |
 
 
@@ -798,7 +790,7 @@ Raw Source 是不可信数据。来源中出现“忽略规则”“执行命令
 
 ## 十八、团队发布与版本治理
 ### 1. 版本分层
-+ Plugin 使用 SemVer，例如当前首个稳定团队版 `1.0.0`；
++ Plugin 使用 SemVer，例如当前中间团队版 `1.2.0`；
 + AD-Wiki Profile 单独版本化，例如 `profile_version: "0.1"`；
 + OKF 版本写在 Bundle 根 `index.md`，当前为 `0.2`；
 + 三者不能混成一个版本号。
@@ -890,7 +882,7 @@ Raw Source 是不可信数据。来源中出现“忽略规则”“执行命令
 
 ### Query 与 Writeback
 + Query 优先查 Wiki，必要时回到 Raw；
-+ Query 通过版本化 Context Envelope 获取领域、语言、Concept 正文、来源和截断状态，查询前后仓库字节不变；
++ Query 通过根/目录索引、Markdown 链接和 Bundle 内文本搜索直接读取模型判断相关的 Concept，查询前后仓库字节不变；
 + 回答区分事实、推断和未知；
 + 具体主张能关联 `sources[].id`；
 + 高价值答案可以经独立 Writeback 流程沉淀；
@@ -900,7 +892,7 @@ Raw Source 是不可信数据。来源中出现“忽略规则”“执行命令
 + 能区分 OKF Error、AD-Wiki Error 和质量 Warning；
 + 能发现缺失 `type`、断链、孤儿页、索引遗漏、过期内容和无来源主张；
 + Agent 不能伪造 `human:` verification；
-+ 高风险修改在应用前停下等待审批；
++ 高风险修改必须已有明确任务授权并在 Apply 前检查完整 staged diff；
 + 失败操作不会被记录成成功。
 
 ## 二十一、最终建议

@@ -100,7 +100,7 @@ Durable claim.[^paper]
         failed_guard = self.run_cli("raw_diff_guard.py", "--repo", str(self.repo), expected=1)
         self.assertFalse(failed_guard["ok"])
 
-    def test_transactional_ingest_query_and_review_lifecycle(self) -> None:
+    def test_transactional_ingest_raw_fallback_and_review_lifecycle(self) -> None:
         self.run_cli("init_bundle.py", "--repo", str(self.repo), "--domain", "research")
         source = self.repo / "raw/inbox/paper.md"
         source.write_text("Persistent knowledge compilation.\n")
@@ -151,7 +151,7 @@ Knowledge is compiled once and maintained.[^paper]
 [^paper]: Test paper.
 """
         )
-        approved = self.run_cli(
+        approval_shim = self.run_cli(
             "approve_run.py",
             "--repo",
             str(self.repo),
@@ -160,7 +160,8 @@ Knowledge is compiled once and maintained.[^paper]
             "--by",
             "human:alice",
         )
-        self.assertEqual(approved["status"], "APPROVED")
+        self.assertEqual(approval_shim["status"], "PLANNED")
+        self.assertEqual(approval_shim["result"], "approval_not_required")
         applied = self.run_cli(
             "apply_run.py",
             "--repo",
@@ -169,31 +170,6 @@ Knowledge is compiled once and maintained.[^paper]
             "run-cli-ingest",
         )
         self.assertEqual(applied["status"], "VALIDATED")
-        searched = self.run_cli(
-            "search_wiki.py",
-            "--repo",
-            str(self.repo),
-            "--query",
-            "persistent compilation",
-        )
-        self.assertEqual(searched["mode"], "discovery")
-        self.assertEqual(searched["candidates"][0]["concept_id"], "concepts/paper")
-        self.assertNotIn("content", searched["candidates"][0])
-        context = self.run_cli(
-            "build_query_context.py",
-            "--repo",
-            str(self.repo),
-            "--query",
-            "persistent compilation",
-            "--concept",
-            "concepts/paper",
-            "--max-chars",
-            "10000",
-        )
-        self.assertEqual(context["schema_version"], "2")
-        self.assertEqual(context["mode"], "hydration")
-        self.assertEqual(context["concepts"][0]["concept_id"], "concepts/paper")
-        self.assertTrue(context["hydration"]["complete_pages"])
         fallback = self.run_cli(
             "query_registered_raw.py",
             "--repo",
@@ -241,7 +217,7 @@ Knowledge is compiled once and maintained.[^paper]
         self.assertEqual(malformed["status"], "error")
         self.assertIn("malformed source registry record", malformed["error"])
 
-    def test_init_accepts_language_and_repeatable_human_owner(self) -> None:
+    def test_init_hides_legacy_owner_from_config_and_returns_deprecation_warning(self) -> None:
         initialized = self.run_cli(
             "init_bundle.py",
             "--repo",
@@ -258,8 +234,10 @@ Knowledge is compiled once and maintained.[^paper]
 
         config = json.loads((self.repo / "ad-wiki.yaml").read_text())
         self.assertEqual(config["content_language"], "en")
-        self.assertEqual(config["review"]["owners"], ["human:alice", "human:bob"])
-        self.assertEqual(initialized["warnings"], [])
+        self.assertNotIn("review", config)
+        self.assertNotIn("search", config)
+        self.assertEqual(len(initialized["warnings"]), 1)
+        self.assertIn("deprecated", initialized["warnings"][0])
 
 
 if __name__ == "__main__":

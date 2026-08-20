@@ -23,12 +23,10 @@ from .doctor import inspect_plugin
 from .runtime import (
     apply_run,
     approve_run,
-    build_query_context,
     migrate_repository,
     prepare_run,
     query_registered_raw,
     review_run,
-    search_repository,
 )
 
 
@@ -77,7 +75,7 @@ def init_main(argv: Sequence[str] | None = None) -> int:
         action="append",
         default=[],
         dest="owners",
-        help="high-risk human approver as human:<id>; repeat as needed",
+        help=argparse.SUPPRESS,
     )
     return _execute(
         parser,
@@ -202,9 +200,9 @@ def prepare_main(argv: Sequence[str] | None = None) -> int:
 
 
 def approve_main(argv: Sequence[str] | None = None) -> int:
-    parser = _base_parser("Approve a complete staged AD-Wiki transaction.")
+    parser = _base_parser("Deprecated compatibility shim; approval is no longer required.")
     parser.add_argument("--run-id", required=True)
-    parser.add_argument("--by", dest="actor", help="real approval actor; required for medium/high risk")
+    parser.add_argument("--by", dest="actor", help=argparse.SUPPRESS)
     return _execute(
         parser,
         lambda args: (approve_run(args.repo, run_id=args.run_id, actor=args.actor), 0),
@@ -213,7 +211,7 @@ def approve_main(argv: Sequence[str] | None = None) -> int:
 
 
 def apply_main(argv: Sequence[str] | None = None) -> int:
-    parser = _base_parser("Apply, index, log, validate, and finalize an approved staged transaction.")
+    parser = _base_parser("Apply, index, log, validate, and finalize a staged transaction.")
     parser.add_argument("--run-id", required=True)
     return _execute(parser, lambda args: (apply_run(args.repo, run_id=args.run_id), 0), argv)
 
@@ -233,37 +231,6 @@ def review_main(argv: Sequence[str] | None = None) -> int:
                 actor=args.actor,
                 decision=args.decision,
                 note=args.note,
-            ),
-            0,
-        ),
-        argv,
-    )
-
-
-def search_main(argv: Sequence[str] | None = None) -> int:
-    parser = _base_parser("Discover lightweight candidate pages in the current AD-Wiki Bundle.")
-    parser.add_argument("--query", required=True)
-    parser.add_argument("--limit", type=int, default=12)
-    return _execute(
-        parser,
-        lambda args: (search_repository(args.repo, query=args.query, limit=args.limit), 0),
-        argv,
-    )
-
-
-def query_context_main(argv: Sequence[str] | None = None) -> int:
-    parser = _base_parser("Hydrate full Markdown for explicitly selected AD-Wiki Concepts.")
-    parser.add_argument("--query", required=True)
-    parser.add_argument("--concept", action="append", required=True, dest="concept_ids")
-    parser.add_argument("--max-chars", type=int, default=30_000)
-    return _execute(
-        parser,
-        lambda args: (
-            build_query_context(
-                args.repo,
-                query=args.query,
-                concept_ids=args.concept_ids,
-                max_chars=args.max_chars,
             ),
             0,
         ),

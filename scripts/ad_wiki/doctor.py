@@ -12,7 +12,6 @@ REQUIRED_SCRIPTS = (
     "apply_run.py",
     "approve_run.py",
     "build_index.py",
-    "build_query_context.py",
     "doctor_plugin.py",
     "init_bundle.py",
     "migrate_bundle.py",
@@ -21,7 +20,6 @@ REQUIRED_SCRIPTS = (
     "raw_diff_guard.py",
     "register_source.py",
     "review_run.py",
-    "search_wiki.py",
     "validate_bundle.py",
     "write_run_report.py",
 )

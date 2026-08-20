@@ -8,7 +8,8 @@ Use the repository's `content_language` for generated human-readable titles, des
 
 - Derive the Concept ID from the path relative to `wiki/`, without `.md`.
 - Do not add a duplicate page ID.
-- Prefer bundle-root links such as `/concepts/incremental-compilation.md`.
+- Use standard Markdown Bundle links such as `[Incremental compilation](/concepts/incremental-compilation.md)`.
+- Do not use `[[wikilinks]]`; the AD-Wiki validator reports them as unsupported syntax.
 - Preserve unknown frontmatter fields when editing.
 - Treat a broken link as an AD-Wiki quality warning, not an OKF conformance failure.
 
@@ -28,7 +29,7 @@ sources:
     title: Source title
     author: human:owner
 generated:
-  by: ad-wiki/1.1.0
+  by: ad-wiki/1.2.0
   at: 2026-08-15T10:00:00Z
 status: draft
 stale_after: 2027-02-15
@@ -41,6 +42,8 @@ stale_after: 2027-02-15
 - Never write `verified` without a real verification event.
 - Treat `today >= stale_after` as stale.
 - Do not persist `trust_score` or `trust_tier`; consumers derive trust from `verified`.
+
+For `type: Source Summary`, use optional `coverage: full | partial`. Write `full` only after reading the complete registered source. A partial summary must use `coverage: partial` and describe the omitted sections or range under evidence and uncertainty; validation reports it as reviewable compilation debt.
 
 ## Claim attribution
 

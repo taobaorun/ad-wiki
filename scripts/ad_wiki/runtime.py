@@ -15,7 +15,6 @@ from .core import (
     ALLOWED_OPERATIONS,
     ALLOWED_RISKS,
     HUMAN_ACTOR,
-    OKF_VERSION,
     PLUGIN_VERSION,
     PROFILE_VERSION,
     RUN_ID,
@@ -45,7 +44,6 @@ from .core import (
 
 
 WRITABLE_OPERATIONS = {"ingest", "writeback", "lint", "migrate"}
-ACTOR = re.compile(r"(?:human|process):[^\s:]+|[^\s/:]+/[^\s/]+")
 SEARCH_SEGMENT = re.compile(r"[a-z0-9][a-z0-9_-]*|[\u3400-\u9fff]+", re.IGNORECASE)
 QUERY_NOISE = (
     "告诉我",
@@ -90,8 +88,6 @@ QUERY_TOKEN_NOISE = frozenset(
         "you",
     }
 )
-QUERY_PROTOCOL_SCHEMA_VERSION = "2"
-SEARCH_ALGORITHM_VERSION = "2"
 CONCEPT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*")
 
 
@@ -298,7 +294,6 @@ def prepare_run(
     now = _utc_now()
     report: dict[str, Any] = {
         "applied_set": [],
-        "approvals": [],
         "baseline": baseline,
         "created_at": now,
         "events": [
@@ -363,26 +358,9 @@ def _staged_files(root: Path, report: dict[str, Any]) -> dict[str, Path]:
     return actual
 
 
-def _validate_actor(actor: str) -> None:
-    if not ACTOR.fullmatch(actor):
-        raise ADWikiError(f"invalid approval/review actor: {actor}")
-
-
 def _validate_human_actor(actor: str) -> None:
     if not HUMAN_ACTOR.fullmatch(actor):
-        raise ADWikiError(f"approval/review actor must be a real human:<id>: {actor}")
-
-
-def _review_owners(config: dict[str, Any]) -> list[str]:
-    review = config.get("review", {})
-    if not isinstance(review, dict):
-        raise ADWikiError("review configuration must be a mapping")
-    owners = review.get("owners", [])
-    if not isinstance(owners, list) or not all(
-        isinstance(item, str) and HUMAN_ACTOR.fullmatch(item) for item in owners
-    ):
-        raise ADWikiError("review.owners must be a list of human:<id> values")
-    return owners
+        raise ADWikiError(f"review actor must be a real human:<id>: {actor}")
 
 
 def approve_run(
@@ -391,42 +369,16 @@ def approve_run(
     run_id: str,
     actor: str | None = None,
 ) -> dict[str, Any]:
+    """Return the current run unchanged for legacy callers of the removed approval step."""
+    _ = actor
     root = _repository_root(repo)
-    _, _, config = _configured_roots(root)
     report = _load_run(root, run_id)
-    if report.get("status") in {"APPROVED", "AUTO_APPROVED"}:
-        return {**report, "result": "unchanged"}
-    if report.get("status") not in {"PLANNED", "REVIEW_REQUIRED"}:
-        raise ADWikiError(f"run cannot be approved from state: {report.get('status')}")
-    _check_baseline(root, report.get("baseline", {}))
-    staged = _staged_files(root, report)
-    risk = report.get("risk")
-    if risk == "low":
-        approval_actor = actor or "process:ad-wiki"
-        _validate_actor(approval_actor)
-        state = "AUTO_APPROVED"
-    else:
-        owners = _review_owners(config) if risk == "high" else []
-        if risk == "high" and not owners:
-            raise ADWikiError(
-                "high-risk run requires at least one human:<id> in review.owners; "
-                "configure review.owners in ad-wiki.yaml"
-            )
-        if actor is None:
-            raise ADWikiError(f"{risk}-risk run requires an explicit approval actor")
-        _validate_human_actor(actor)
-        if risk == "high":
-            if actor not in owners:
-                raise ADWikiError(f"approval actor is not a configured owner: {actor}")
-        approval_actor = actor
-        state = "APPROVED"
-    report.setdefault("approvals", []).append({"at": _utc_now(), "by": approval_actor, "risk": risk})
-    report["approved_staged_hashes"] = {
-        relative: _sha256_file(path) for relative, path in sorted(staged.items())
+    return {
+        **report,
+        "deprecated": True,
+        "message": "Pre-apply approval was removed; call apply_run.py directly.",
+        "result": "approval_not_required",
     }
-    _advance(report, state, by=approval_actor)
-    _save_run(root, report)
-    return {**report, "result": "approved"}
 
 
 @contextmanager
@@ -549,14 +501,26 @@ def apply_run(repo: str | os.PathLike[str], *, run_id: str) -> dict[str, Any]:
         if not raw_report["ok"]:
             raise ADWikiError("Raw guard failed for the completed run")
         return {**report, "result": "unchanged"}
-    if report.get("status") not in {"APPROVED", "AUTO_APPROVED"}:
-        raise ADWikiError(f"run must be approved before apply; current state: {report.get('status')}")
+    if report.get("status") not in {
+        "PLANNED",
+        "REVIEW_REQUIRED",
+        "APPROVED",
+        "AUTO_APPROVED",
+    }:
+        raise ADWikiError(f"run cannot be applied from state: {report.get('status')}")
     staged = _staged_files(root, report)
-    staged_hashes = {relative: _sha256_file(path) for relative, path in sorted(staged.items())}
-    if staged_hashes != report.get("approved_staged_hashes"):
-        raise ADWikiError("staged content changed after approval")
 
     with _repository_lock(root, run_id):
+        staged_bytes = {
+            relative: path.read_bytes() for relative, path in sorted(staged.items())
+        }
+        staged_hashes = {
+            relative: hashlib.sha256(content).hexdigest()
+            for relative, content in staged_bytes.items()
+        }
+        approved_staged_hashes = report.get("approved_staged_hashes")
+        if approved_staged_hashes is not None and staged_hashes != approved_staged_hashes:
+            raise ADWikiError("staged content changed after recorded approval")
         snapshot: dict[Path, bytes | None] | None = None
         validation: dict[str, Any] | None = None
         try:
@@ -567,11 +531,11 @@ def apply_run(repo: str | os.PathLike[str], *, run_id: str) -> dict[str, Any]:
             rollback_paths = _rollback_paths(root, bundle, list(report["write_set"]))
             snapshot = _snapshot(rollback_paths, root)
 
-            for relative, staged_path in staged.items():
+            for relative, content in staged_bytes.items():
                 target = _resolve_inside(root, relative, "write_set path")
                 if target.is_symlink():
                     raise ADWikiError(f"write target must not be a symlink: {relative}")
-                _atomic_write_bytes(target, staged_path.read_bytes())
+                _atomic_write_bytes(target, content)
 
             index_result = build_indexes(root)
             _prepend_log(
@@ -581,7 +545,13 @@ def apply_run(repo: str | os.PathLike[str], *, run_id: str) -> dict[str, Any]:
                 len(staged),
                 _content_language(config),
             )
-            applied_set = sorted({*report["write_set"], *index_result["changed"], _relative_posix(bundle / "log.md", root)})
+            applied_set = sorted(
+                {
+                    *report["write_set"],
+                    *index_result["changed"],
+                    _relative_posix(bundle / "log.md", root),
+                }
+            )
             report["applied_set"] = applied_set
             report["staged_hashes"] = staged_hashes
             _advance(report, "APPLIED")
@@ -690,205 +660,6 @@ def _minimum_term_matches(term_count: int) -> int:
     return 3
 
 
-def _score_search_document(
-    *,
-    query: str,
-    terms: list[str],
-    title: str,
-    description: str,
-    body: str,
-    path: str,
-    full_text: str,
-) -> dict[str, Any] | None:
-    field_weights = {"title": 10, "description": 3, "body": 1, "path": 2}
-    field_counts = {
-        "title": Counter(_search_tokens(title)),
-        "description": Counter(_search_tokens(description)),
-        "body": Counter(_search_tokens(body)),
-        "path": Counter(_search_tokens(path)),
-    }
-    matched_fields: dict[str, list[str]] = {}
-    score_components: dict[str, int] = {}
-    matched_terms: set[str] = set()
-    for field, counts in field_counts.items():
-        field_terms = sorted(term for term in terms if counts[term] > 0)
-        if field_terms:
-            matched_fields[field] = field_terms
-            matched_terms.update(field_terms)
-        score_components[field] = field_weights[field] * sum(counts[term] for term in terms)
-
-    if len(matched_terms) < _minimum_term_matches(len(terms)):
-        return None
-    coverage = len(matched_terms) / len(terms)
-    score_components["coverage"] = round(20 * coverage)
-    score_components["exact_query"] = 8 if query.casefold() in full_text.casefold() else 0
-    score = sum(score_components.values())
-    if score <= 0:
-        return None
-    return {
-        "matched_fields": matched_fields,
-        "matched_terms": sorted(matched_terms),
-        "score": score,
-        "score_components": score_components,
-        "term_coverage": round(coverage, 4),
-    }
-
-
-def _best_snippet(body: str, terms: list[str]) -> str:
-    best: tuple[int, int, str] | None = None
-    for position, line in enumerate(body.splitlines()):
-        candidate = line.strip()
-        if not candidate:
-            continue
-        line_terms = set(_search_tokens(candidate))
-        matches = len(line_terms.intersection(terms))
-        if matches <= 0:
-            continue
-        ranked = (matches, -position, candidate[:240])
-        if best is None or ranked > best:
-            best = ranked
-    return best[2] if best else ""
-
-
-def _suppress_covered_source_summaries(results: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
-    covered_resources = {
-        str(source["resource"])
-        for result in results
-        if result["type"] != "Source Summary"
-        for source in result["sources"]
-        if source.get("resource")
-    }
-    filtered: list[dict[str, Any]] = []
-    suppressed = 0
-    for result in results:
-        resources = {str(source["resource"]) for source in result["sources"] if source.get("resource")}
-        if result["type"] == "Source Summary" and resources.intersection(covered_resources):
-            suppressed += 1
-            continue
-        filtered.append(result)
-    return filtered, suppressed
-
-
-def _query_repository_metadata(
-    root: Path,
-    bundle: Path,
-    config: dict[str, Any],
-) -> dict[str, str]:
-    content_language = _content_language(config)
-    domain_config = config.get("domain")
-    if not isinstance(domain_config, dict):
-        raise ADWikiError("domain configuration must be an object")
-    domain = domain_config.get("name")
-    if not isinstance(domain, str) or not domain.strip():
-        raise ADWikiError("domain.name must be a non-empty string")
-    root_index = bundle / "index.md"
-    if root_index.is_file():
-        parsed_index = _frontmatter(root_index.read_text(encoding="utf-8"))
-        if parsed_index:
-            index_fields, _, _ = _top_level(parsed_index[0])
-            declared_okf = index_fields.get("okf_version")
-            if declared_okf and declared_okf != OKF_VERSION:
-                raise ADWikiError(
-                    f"unsupported OKF version {declared_okf}; expected {OKF_VERSION}; "
-                    "use the Migrate workflow"
-                )
-    return {
-        "bundle": _relative_posix(bundle, root),
-        "content_language": content_language,
-        "domain": domain.strip(),
-        "okf_version": OKF_VERSION,
-        "profile_version": str(config.get("profile_version", PROFILE_VERSION)),
-    }
-
-
-def search_repository(
-    repo: str | os.PathLike[str],
-    *,
-    query: str,
-    limit: int = 12,
-) -> dict[str, Any]:
-    root = _repository_root(repo)
-    _, bundle, config = _configured_roots(root)
-    _require_supported_profile(config)
-    search_config = config.get("search", {})
-    if not isinstance(search_config, dict) or search_config.get("provider", "builtin") != "builtin":
-        raise ADWikiError("search.provider is not supported by this Plugin runtime")
-    if not query.strip():
-        raise ADWikiError("query must be non-empty")
-    if limit < 1 or limit > 100:
-        raise ADWikiError("limit must be between 1 and 100")
-    if not (bundle / "index.md").is_file():
-        raise ADWikiError("Bundle root index.md is missing")
-
-    terms = _query_terms(query)
-    if not terms:
-        raise ADWikiError("query has no searchable terms")
-    results: list[dict[str, Any]] = []
-    markdown, unsafe = _bundle_markdown_files(bundle)
-    if unsafe:
-        raise ADWikiError("Bundle contains unsafe Markdown paths")
-    for path in markdown:
-        bundle_relative = path.relative_to(bundle)
-        if path.name in {"index.md", "log.md"} or any(
-            part.startswith(".") for part in bundle_relative.parts
-        ):
-            continue
-        text = path.read_text(encoding="utf-8")
-        parsed = _frontmatter(text)
-        if not parsed:
-            continue
-        lines, body = parsed
-        fields, _, _ = _top_level(lines)
-        title = fields.get("title") or path.stem.replace("-", " ").title()
-        description = fields.get("description") or ""
-        scoring = _score_search_document(
-            query=query,
-            terms=terms,
-            title=title,
-            description=description,
-            body=body,
-            path=bundle_relative.as_posix(),
-            full_text=text,
-        )
-        if scoring is None:
-            continue
-        sources = [
-            {key: entry[key] for key in ("id", "resource", "title") if entry.get(key)}
-            for entry in _source_entries(lines, fields.get("sources"))
-        ]
-        results.append(
-            {
-                "concept_id": bundle_relative.with_suffix("").as_posix(),
-                "description": description,
-                "path": _relative_posix(path, root),
-                **scoring,
-                "snippet": _best_snippet(body, terms),
-                "sources": sources,
-                "title": title,
-                "type": fields.get("type") or "",
-            }
-        )
-    results.sort(key=lambda item: (-item["score"], item["path"].casefold()))
-    results, suppressed = _suppress_covered_source_summaries(results)
-    candidates = results[:limit]
-    return {
-        "schema_version": QUERY_PROTOCOL_SCHEMA_VERSION,
-        "mode": "discovery",
-        "query": query,
-        "repository": _query_repository_metadata(root, bundle, config),
-        "retrieval": {
-            "algorithm_version": SEARCH_ALGORITHM_VERSION,
-            "provider": "builtin",
-            "candidate_count": len(results),
-            "returned_count": len(candidates),
-            "limit": limit,
-            "suppressed_count": suppressed,
-            "has_more_candidates": len(results) > len(candidates),
-        },
-        "candidates": candidates,
-    }
-
-
 def _has_symlink_component(path: Path, root: Path) -> bool:
     relative = path.relative_to(root)
     current = root
@@ -944,69 +715,6 @@ def _read_bundle_concept(
         raise ADWikiError(f"{purpose} Concept lacks frontmatter: {concept_id}")
     lines, body = parsed
     return path, text, lines, body
-
-
-def build_query_context(
-    repo: str | os.PathLike[str],
-    *,
-    query: str,
-    concept_ids: Iterable[str],
-    max_chars: int = 30_000,
-) -> dict[str, Any]:
-    """Hydrate full Markdown for explicitly selected Bundle Concepts."""
-    if not query.strip():
-        raise ADWikiError("query must be non-empty")
-    if max_chars < 1 or max_chars > 1_000_000:
-        raise ADWikiError("max-chars must be between 1 and 1000000")
-
-    root = _repository_root(repo)
-    _, bundle, config = _configured_roots(root)
-    _require_supported_profile(config)
-    normalized_ids = _normalized_concept_ids(concept_ids)
-    included_chars = 0
-    concepts: list[dict[str, Any]] = []
-    for concept_id in normalized_ids:
-        path, content, lines, _ = _read_bundle_concept(
-            bundle,
-            concept_id,
-            purpose="query hydration",
-        )
-        fields, _, _ = _top_level(lines)
-        sources = [
-            {key: entry[key] for key in ("id", "resource", "title") if entry.get(key)}
-            for entry in _source_entries(lines, fields.get("sources"))
-        ]
-        included_chars += len(content)
-        concepts.append(
-            {
-                "concept_id": concept_id,
-                "content": content,
-                "description": fields.get("description") or "",
-                "path": _relative_posix(path, root),
-                "sources": sources,
-                "title": fields.get("title") or path.stem.replace("-", " ").title(),
-                "type": fields.get("type") or "",
-            }
-        )
-    if included_chars > max_chars:
-        raise ADWikiError(
-            f"selected Concept content exceeds max-chars ({included_chars} > {max_chars}); "
-            "select fewer Concepts or raise the explicit limit"
-        )
-    return {
-        "schema_version": QUERY_PROTOCOL_SCHEMA_VERSION,
-        "mode": "hydration",
-        "query": query,
-        "repository": _query_repository_metadata(root, bundle, config),
-        "hydration": {
-            "selected_count": len(normalized_ids),
-            "included_count": len(concepts),
-            "included_chars": included_chars,
-            "max_chars": max_chars,
-            "complete_pages": True,
-        },
-        "concepts": concepts,
-    }
 
 
 def _selected_concept_sources(

@@ -22,7 +22,7 @@ class PackagingTests(unittest.TestCase):
     def test_dual_host_plugin_contracts_share_one_release_identity(self) -> None:
         codex = json.loads((PLUGIN_ROOT / ".codex-plugin/plugin.json").read_text())
         claude = json.loads((PLUGIN_ROOT / ".claude-plugin/plugin.json").read_text())
-        self.assertEqual(PLUGIN_VERSION, "1.1.0")
+        self.assertEqual(PLUGIN_VERSION, "1.2.0")
 
         for manifest in (codex, claude):
             self.assertEqual(manifest["name"], "ad-wiki")
@@ -93,7 +93,8 @@ class PackagingTests(unittest.TestCase):
         self.assertIn("${CLAUDE_SKILL_DIR}", skill)
         self.assertIn("<plugin-root>/scripts/", skill)
         self.assertIn("content_language", skill)
-        self.assertIn("--owner human:<id>", skill)
+        self.assertIn("whole long-lived Wiki", skill)
+        self.assertIn("Do not create or update host memory", skill)
         self.assertNotIn("`../../scripts/", skill)
         for name in ("okf-profile.md", "workflows.md", "risk-policy.md", "migration-policy.md"):
             self.assertIn(f"references/{name}", skill)
@@ -104,47 +105,44 @@ class PackagingTests(unittest.TestCase):
         self.assertIn("allow_implicit_invocation: true", openai)
         for command in (
             "prepare_run.py",
-            "approve_run.py",
             "apply_run.py",
             "review_run.py",
-            "search_wiki.py",
-            "build_query_context.py",
             "migrate_bundle.py",
         ):
             self.assertIn(command, skill)
+        self.assertIn("deprecated no-op shim", skill)
+        self.assertNotIn("search_wiki.py", skill)
+        self.assertNotIn("build_query_context.py", skill)
         self.assertNotIn("### Query", skill)
 
     def test_query_skill_owns_read_only_cited_answers(self) -> None:
         skill = (QUERY_SKILL_ROOT / "SKILL.md").read_text()
         self.assertNotIn("TODO", skill)
-        self.assertIn("<plugin-root>/scripts/search_wiki.py", skill)
-        self.assertIn("<plugin-root>/scripts/build_query_context.py", skill)
         self.assertIn("<plugin-root>/scripts/query_registered_raw.py", skill)
         self.assertIn("references/query-contract.md", skill)
         self.assertIn("content_language", skill)
+        self.assertIn("rg -n", skill)
+        self.assertIn("Do not impose a fixed Top-K", skill)
         self.assertIn("Compiled hit", skill)
         self.assertIn("Bounded Raw fallback", skill)
         self.assertIn("Knowledge gap", skill)
         self.assertIn("Never emit an absolute local path", skill)
-        self.assertIn("reuse the current hydrated content", skill)
+        self.assertIn("reuse the current evidence", skill)
         self.assertIn("--concept <concept-id>", skill)
-        self.assertIn("Do not apply a fixed score percentage", skill)
-        self.assertIn("retrieval.has_more_candidates", skill)
-        self.assertNotIn("--selection-mode", skill)
+        self.assertNotIn("search_wiki.py", skill)
+        self.assertNotIn("build_query_context.py", skill)
+        self.assertNotIn("Context Envelope", skill)
         for command in ("prepare_run.py", "approve_run.py", "apply_run.py", "review_run.py"):
             self.assertNotIn(f"<plugin-root>/scripts/{command}", skill)
         self.assertNotIn("ad-wiki-maintainer/SKILL.md", skill)
 
         contract = (QUERY_SKILL_ROOT / "references/query-contract.md").read_text()
-        self.assertIn("Discovery Catalog v2", contract)
-        self.assertIn("Hydration Envelope v2", contract)
+        self.assertIn("Query Contract v3", contract)
+        self.assertIn("progressive disclosure", contract)
+        self.assertIn("No deterministic scorer", contract)
+        self.assertIn("roughly one thousand pages", contract)
         self.assertIn("writeback candidate", contract)
         self.assertIn("content_language", contract)
-        self.assertIn("has_more_candidates", contract)
-        self.assertIn("reruns Discovery once", contract)
-        self.assertIn("complete_pages", contract)
-        self.assertIn("fails atomically", contract)
-        self.assertNotIn("selection_mode", contract)
         self.assertIn("query_registered_raw.py", contract)
 
         openai = (QUERY_SKILL_ROOT / "agents/openai.yaml").read_text()
@@ -172,6 +170,9 @@ class PackagingTests(unittest.TestCase):
             self.assertIn("status: draft", localized_text, name)
             self.assertIn(f"by: ad-wiki/{PLUGIN_VERSION}", localized_text, name)
             self.assertNotIn("verified:", localized_text, name)
+            if expected_type == "Source Summary":
+                self.assertIn("coverage: full", text)
+                self.assertIn("coverage: full", localized_text)
 
     def test_team_usable_runtime_entrypoints_are_packaged(self) -> None:
         scripts = PLUGIN_ROOT / "scripts"
@@ -180,24 +181,23 @@ class PackagingTests(unittest.TestCase):
             "approve_run.py",
             "apply_run.py",
             "review_run.py",
-            "search_wiki.py",
-            "build_query_context.py",
             "query_registered_raw.py",
             "doctor_plugin.py",
             "migrate_bundle.py",
         ):
             self.assertTrue((scripts / name).is_file(), name)
+        for removed in ("search_wiki.py", "build_query_context.py"):
+            self.assertFalse((scripts / removed).exists(), removed)
 
-    def test_maintainer_requires_retrieval_ready_atomic_compilation(self) -> None:
+    def test_maintainer_requires_model_navigation_and_atomic_compilation(self) -> None:
         skill = (MAINTAINER_SKILL_ROOT / "SKILL.md").read_text()
         workflows = (MAINTAINER_SKILL_ROOT / "references/workflows.md").read_text()
         for text in (skill, workflows):
             self.assertIn("Source Summary", text)
-            self.assertIn("atomic", text)
-            self.assertIn("representative", text)
-            self.assertIn("compilation debt", text)
-        self.assertIn("build_query_context.py --repo", skill)
-        self.assertIn("build_query_context.py --concept", workflows)
+            self.assertIn("coverage: partial", text)
+            self.assertIn("rg", text)
+            self.assertNotIn("build_query_context.py", text)
+            self.assertNotIn("search_wiki.py", text)
 
     def test_plugin_doctor_reports_package_readiness_without_claiming_installation(self) -> None:
         healthy = inspect_plugin(PLUGIN_ROOT, repo=PLUGIN_ROOT / "examples/minimal-wiki")

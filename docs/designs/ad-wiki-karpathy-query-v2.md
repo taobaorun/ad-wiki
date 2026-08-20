@@ -1,5 +1,7 @@
 # Technical Design: AD Wiki Karpathy Query v2
 
+> 历史文档：本设计已由 [AD-Wiki 模型直读导航 v1.2](ad-wiki-model-navigation-v1.2.md) 取代。v1.2 完整删除 Discovery、Hydration、builtin scorer 和 Context Builder，不保留 Query API 兼容入口。
+
 Design identity: `ad-wiki-karpathy-query-v2-accepted`
 
 Product Contract: `docs/product-specs/ad-wiki-repository-local-scope.md` R18-R24

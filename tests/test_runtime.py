@@ -22,12 +22,10 @@ from ad_wiki.core import (  # noqa: E402
 from ad_wiki.runtime import (  # noqa: E402
     apply_run,
     approve_run,
-    build_query_context,
     migrate_repository,
     prepare_run,
     query_registered_raw,
     review_run,
-    search_repository,
 )
 
 
@@ -91,7 +89,6 @@ class TransactionTests(RuntimeTestCase):
         staged = self.prepare("run-success")
         staged.write_text(concept_text())
 
-        approved = approve_run(self.repo, run_id="run-success", actor="human:alice")
         applied = apply_run(self.repo, run_id="run-success")
         reviewed = review_run(
             self.repo,
@@ -101,8 +98,9 @@ class TransactionTests(RuntimeTestCase):
             note="Claims and source attribution reviewed.",
         )
 
-        self.assertEqual(approved["status"], "APPROVED")
         self.assertEqual(applied["status"], "VALIDATED")
+        self.assertNotIn("approvals", applied)
+        self.assertNotIn("approved_staged_hashes", applied)
         self.assertEqual(reviewed["status"], "REVIEWED")
         self.assertTrue((self.repo / "wiki/concepts/compilation.md").is_file())
         self.assertIn("/concepts/compilation.md", (self.repo / "wiki/concepts/index.md").read_text())
@@ -115,8 +113,6 @@ class TransactionTests(RuntimeTestCase):
         staged.write_text("# Missing frontmatter\n")
         original_log = (self.repo / "wiki/log.md").read_bytes()
         original_index = (self.repo / "wiki/index.md").read_bytes()
-        approve_run(self.repo, run_id="run-invalid")
-
         with self.assertRaisesRegex(ADWikiError, "post-apply Bundle validation failed"):
             apply_run(self.repo, run_id="run-invalid")
 
@@ -128,7 +124,6 @@ class TransactionTests(RuntimeTestCase):
     def test_rejects_baseline_drift_before_touching_planned_targets(self) -> None:
         staged = self.prepare("run-drift", risk="low")
         staged.write_text(concept_text())
-        approve_run(self.repo, run_id="run-drift")
         with (self.repo / "wiki/index.md").open("a", encoding="utf-8") as handle:
             handle.write("\nexternal change\n")
 
@@ -138,20 +133,17 @@ class TransactionTests(RuntimeTestCase):
         self.assertFalse((self.repo / "wiki/concepts/compilation.md").exists())
         self.assertEqual(self.report("run-drift")["status"], "FAILED")
 
-    def test_binds_approval_to_staged_bytes_and_review_to_validated_bytes(self) -> None:
+    def test_applies_current_staged_bytes_and_binds_review_to_validated_bytes(self) -> None:
         staged = self.prepare("run-bound", risk="low")
-        staged.write_text(concept_text())
-        approve_run(self.repo, run_id="run-bound")
-        staged.write_text(concept_text("Changed After Approval"))
-
-        with self.assertRaisesRegex(ADWikiError, "changed after approval"):
-            apply_run(self.repo, run_id="run-bound")
-        self.assertEqual(self.report("run-bound")["status"], "AUTO_APPROVED")
-
-        staged.write_text(concept_text())
+        staged.write_text(concept_text("Changed After Prepare"))
         applied = apply_run(self.repo, run_id="run-bound")
         self.assertEqual(applied["status"], "VALIDATED")
         target = self.repo / "wiki/concepts/compilation.md"
+        self.assertIn("Changed After Prepare", target.read_text())
+        self.assertEqual(
+            applied["staged_hashes"]["wiki/concepts/compilation.md"],
+            hashlib.sha256(target.read_bytes()).hexdigest(),
+        )
         target.write_text(concept_text("Changed After Validation"))
         with self.assertRaisesRegex(ADWikiError, "baseline drifted"):
             review_run(
@@ -161,26 +153,27 @@ class TransactionTests(RuntimeTestCase):
                 decision="approved",
             )
 
-    def test_binds_approval_and_review_to_repository_policy(self) -> None:
+    def test_binds_apply_and_review_to_repository_policy(self) -> None:
         staged = self.prepare("run-policy-bound", risk="medium")
         staged.write_text(concept_text())
         config_path = self.repo / "ad-wiki.yaml"
         original_config = config_path.read_text()
         config = json.loads(original_config)
-        config["review"]["owners"] = ["human:bob"]
+        config["review"] = {"owners": ["human:bob"], "high_risk": "pre_apply"}
         config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
 
         with self.assertRaisesRegex(ADWikiError, "baseline drifted"):
-            approve_run(self.repo, run_id="run-policy-bound", actor="human:bob")
+            apply_run(self.repo, run_id="run-policy-bound")
 
         config_path.write_text(original_config)
-        approve_run(self.repo, run_id="run-policy-bound", actor="human:alice")
-        apply_run(self.repo, run_id="run-policy-bound")
+        staged = self.prepare("run-review-policy", risk="medium", target="wiki/concepts/review.md")
+        staged.write_text(concept_text("Review Policy"))
+        apply_run(self.repo, run_id="run-review-policy")
         config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
         with self.assertRaisesRegex(ADWikiError, "baseline drifted"):
             review_run(
                 self.repo,
-                run_id="run-policy-bound",
+                run_id="run-review-policy",
                 actor="human:bob",
                 decision="approved",
             )
@@ -188,37 +181,24 @@ class TransactionTests(RuntimeTestCase):
     def test_lock_contention_is_retryable_and_does_not_change_run_state(self) -> None:
         staged = self.prepare("run-lock", risk="low")
         staged.write_text(concept_text())
-        approve_run(self.repo, run_id="run-lock")
         (self.repo / ".ad-wiki/lock").write_text("held\n")
 
         with self.assertRaisesRegex(ADWikiError, "another AD-Wiki writer"):
             apply_run(self.repo, run_id="run-lock")
 
-        self.assertEqual(self.report("run-lock")["status"], "AUTO_APPROVED")
+        self.assertEqual(self.report("run-lock")["status"], "PLANNED")
         self.assertFalse((self.repo / "wiki/concepts/compilation.md").exists())
 
-    def test_requires_exact_staged_write_set_and_configured_owner(self) -> None:
-        config_path = self.repo / "ad-wiki.yaml"
-        config = json.loads(config_path.read_text())
-        config["review"]["owners"] = ["human:alice"]
-        config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+    def test_requires_exact_staged_write_set_but_not_a_configured_owner(self) -> None:
         staged = self.prepare("run-owned", risk="high")
         staged.write_text(concept_text())
         extra = staged.parent / "extra.md"
         extra.write_text(concept_text("Extra"))
 
         with self.assertRaisesRegex(ADWikiError, "unplanned"):
-            approve_run(self.repo, run_id="run-owned", actor="human:alice")
+            apply_run(self.repo, run_id="run-owned")
         extra.unlink()
-        with self.assertRaisesRegex(ADWikiError, "explicit approval actor"):
-            approve_run(self.repo, run_id="run-owned")
-        with self.assertRaisesRegex(ADWikiError, "not a configured owner"):
-            approve_run(self.repo, run_id="run-owned", actor="human:bob")
-        self.assertEqual(
-            approve_run(self.repo, run_id="run-owned", actor="human:alice")["status"],
-            "APPROVED",
-        )
-        apply_run(self.repo, run_id="run-owned")
+        self.assertEqual(apply_run(self.repo, run_id="run-owned")["status"], "VALIDATED")
         self.assertEqual(
             review_run(
                 self.repo,
@@ -229,28 +209,27 @@ class TransactionTests(RuntimeTestCase):
             "REVIEWED",
         )
 
-    def test_empty_owner_list_blocks_only_high_risk_approval(self) -> None:
+    def test_medium_and_high_risk_apply_without_owners(self) -> None:
         medium = self.prepare("run-medium-open", risk="medium")
         medium.write_text(concept_text())
-        self.assertEqual(
-            approve_run(self.repo, run_id="run-medium-open", actor="human:writer")["status"],
-            "APPROVED",
-        )
+        self.assertEqual(apply_run(self.repo, run_id="run-medium-open")["status"], "VALIDATED")
 
         high = self.prepare("run-high-ownerless", risk="high", target="wiki/concepts/high.md")
         high.write_text(concept_text("High Risk"))
-        with self.assertRaisesRegex(ADWikiError, "review.owners"):
-            approve_run(self.repo, run_id="run-high-ownerless")
+        self.assertEqual(apply_run(self.repo, run_id="run-high-ownerless")["status"], "VALIDATED")
 
-    def test_owner_allowlist_does_not_restrict_medium_approval_or_review(self) -> None:
+    def test_legacy_owner_allowlist_does_not_restrict_apply_or_review(self) -> None:
         config_path = self.repo / "ad-wiki.yaml"
         config = json.loads(config_path.read_text())
-        config["review"]["owners"] = ["human:owner"]
+        config["review"] = {
+            "high_risk": "pre_apply",
+            "medium_risk": "post_apply",
+            "owners": ["human:owner"],
+        }
         config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
         staged = self.prepare("run-medium-reviewer", risk="medium")
         staged.write_text(concept_text())
 
-        approve_run(self.repo, run_id="run-medium-reviewer", actor="human:writer")
         apply_run(self.repo, run_id="run-medium-reviewer")
         reviewed = review_run(
             self.repo,
@@ -261,13 +240,13 @@ class TransactionTests(RuntimeTestCase):
 
         self.assertEqual(reviewed["status"], "REVIEWED")
 
-    def test_medium_approval_and_all_reviews_require_human_actors(self) -> None:
+    def test_approval_shim_records_nothing_and_reviews_require_human_actors(self) -> None:
         staged = self.prepare("run-human-audit", risk="medium")
         staged.write_text(concept_text())
-        with self.assertRaisesRegex(ADWikiError, "human:<id>"):
-            approve_run(self.repo, run_id="run-human-audit", actor="process:ad-wiki")
-
-        approve_run(self.repo, run_id="run-human-audit", actor="human:writer")
+        shim = approve_run(self.repo, run_id="run-human-audit", actor="process:ad-wiki")
+        self.assertEqual(shim["result"], "approval_not_required")
+        self.assertEqual(shim["status"], "PLANNED")
+        self.assertNotIn("approvals", self.report("run-human-audit"))
         apply_run(self.repo, run_id="run-human-audit")
         with self.assertRaisesRegex(ADWikiError, "human:<id>"):
             review_run(
@@ -277,10 +256,46 @@ class TransactionTests(RuntimeTestCase):
                 decision="approved",
             )
 
+    def test_applies_legacy_approved_run_and_preserves_its_hash_binding(self) -> None:
+        staged = self.prepare("run-legacy-approved", risk="high")
+        staged.write_text(concept_text("Legacy Approved"))
+        report = self.report("run-legacy-approved")
+        report["status"] = "APPROVED"
+        report["approvals"] = [
+            {"at": "2026-08-18T00:00:00Z", "by": "human:legacy", "risk": "high"}
+        ]
+        report["approved_staged_hashes"] = {
+            "wiki/concepts/compilation.md": hashlib.sha256(staged.read_bytes()).hexdigest()
+        }
+        (self.repo / ".ad-wiki/runs/run-legacy-approved/run.json").write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n"
+        )
+
+        self.assertEqual(
+            apply_run(self.repo, run_id="run-legacy-approved")["status"],
+            "VALIDATED",
+        )
+
+    def test_rejects_changed_bytes_for_legacy_approved_run(self) -> None:
+        staged = self.prepare("run-legacy-changed", risk="low")
+        staged.write_text(concept_text("Before Legacy Approval"))
+        report = self.report("run-legacy-changed")
+        report["status"] = "AUTO_APPROVED"
+        report["approved_staged_hashes"] = {
+            "wiki/concepts/compilation.md": hashlib.sha256(staged.read_bytes()).hexdigest()
+        }
+        (self.repo / ".ad-wiki/runs/run-legacy-changed/run.json").write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n"
+        )
+        staged.write_text(concept_text("Changed After Legacy Approval"))
+
+        with self.assertRaisesRegex(ADWikiError, "changed after recorded approval"):
+            apply_run(self.repo, run_id="run-legacy-changed")
+        self.assertEqual(self.report("run-legacy-changed")["status"], "AUTO_APPROVED")
+
     def test_transaction_log_uses_configured_content_language(self) -> None:
         staged = self.prepare("run-zh-log", risk="low")
         staged.write_text(concept_text())
-        approve_run(self.repo, run_id="run-zh-log")
         apply_run(self.repo, run_id="run-zh-log")
 
         log = (self.repo / "wiki/log.md").read_text()
@@ -294,7 +309,6 @@ class TransactionTests(RuntimeTestCase):
             target="wiki/concepts/log4j2.md",
         )
         longer.write_text(concept_text("Log4j2"))
-        approve_run(self.repo, run_id="run-log4j2")
         apply_run(self.repo, run_id="run-log4j2")
 
         shorter = self.prepare(
@@ -303,7 +317,6 @@ class TransactionTests(RuntimeTestCase):
             target="wiki/concepts/logging.md",
         )
         shorter.write_text(concept_text("Log"))
-        approve_run(self.repo, run_id="run-log")
         applied = apply_run(self.repo, run_id="run-log")
 
         log = (self.repo / "wiki/log.md").read_text()
@@ -331,7 +344,6 @@ class TransactionTests(RuntimeTestCase):
             staged.parent.mkdir(parents=True)
             staged.write_text(concept_text("English"))
 
-            approve_run(repo, run_id="run-en-log")
             apply_run(repo, run_id="run-en-log")
 
             self.assertIn("## Concepts", (repo / "wiki/concepts/index.md").read_text())
@@ -442,301 +454,6 @@ class TransactionTests(RuntimeTestCase):
 
 
 class SearchAndPolicyTests(RuntimeTestCase):
-    def test_search_returns_ranked_concepts_and_sources_without_mutation(self) -> None:
-        concept = self.repo / "wiki/concepts/compilation.md"
-        concept.write_text(concept_text())
-        build_indexes(self.repo)
-        before = {
-            path.relative_to(self.repo).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
-            for path in self.repo.rglob("*")
-            if path.is_file()
-        }
-
-        result = search_repository(self.repo, query="persistent compilation", limit=5)
-
-        after = {
-            path.relative_to(self.repo).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
-            for path in self.repo.rglob("*")
-            if path.is_file()
-        }
-        self.assertEqual(result["schema_version"], "2")
-        self.assertEqual(result["mode"], "discovery")
-        self.assertEqual(result["candidates"][0]["concept_id"], "concepts/compilation")
-        self.assertEqual(result["candidates"][0]["sources"][0]["id"], "source-a")
-        self.assertEqual(result["retrieval"]["algorithm_version"], "2")
-        self.assertIn("persistent", result["candidates"][0]["matched_terms"])
-        self.assertIn("body", result["candidates"][0]["matched_fields"])
-        self.assertGreater(result["candidates"][0]["term_coverage"], 0)
-        self.assertEqual(result["retrieval"]["candidate_count"], 1)
-        self.assertEqual(result["retrieval"]["returned_count"], 1)
-        self.assertNotIn("content", result["candidates"][0])
-        self.assertEqual(before, after)
-
-    def test_search_uses_chinese_phrases_instead_of_common_single_characters(self) -> None:
-        target = self.repo / "wiki/concepts/extension-point.md"
-        target.write_text(
-            concept_text("SOFA 扩展点机制").replace(
-                "Persistent Wiki knowledge compounds across questions.",
-                "扩展点通过贡献点注册完成跨模块定制。",
-            )
-        )
-        unrelated = self.repo / "wiki/concepts/application.md"
-        unrelated.write_text(
-            concept_text("SOFA 应用基础").replace(
-                "Persistent Wiki knowledge compounds across questions.",
-                "应用框架提供模块和服务能力。",
-            )
-        )
-        build_indexes(self.repo)
-
-        result = search_repository(
-            self.repo,
-            query="SOFA4 应用扩展点的原理是什么？如何使用扩展点？",
-            limit=10,
-        )
-
-        self.assertEqual(result["candidates"][0]["concept_id"], "concepts/extension-point")
-        self.assertIn("扩展点", result["candidates"][0]["matched_terms"])
-        self.assertNotIn("的", result["candidates"][0]["matched_terms"])
-        self.assertEqual(result["retrieval"]["candidate_count"], 1)
-
-    def test_search_requires_more_than_generic_product_and_mechanism_terms(self) -> None:
-        target = self.repo / "wiki/concepts/classloading.md"
-        target.write_text(
-            concept_text("SOFA4 类加载机制").replace(
-                "Persistent Wiki knowledge compounds across questions.",
-                "类加载使用独立 ClassLoader 完成模块隔离。",
-            )
-        )
-        generic = self.repo / "wiki/concepts/generic.md"
-        generic.write_text(
-            concept_text("SOFA4 通用机制").replace(
-                "Persistent Wiki knowledge compounds across questions.",
-                "这是 SOFA4 的通用机制说明。",
-            )
-        )
-        build_indexes(self.repo)
-
-        result = search_repository(self.repo, query="SOFA4 的类加载机制如何工作？", limit=10)
-
-        self.assertEqual(
-            [item["concept_id"] for item in result["candidates"]],
-            ["concepts/classloading"],
-        )
-
-    def test_search_ignores_english_question_framing(self) -> None:
-        concept = self.repo / "wiki/concepts/persistence.md"
-        concept.write_text(concept_text("Persistent Wiki"))
-        build_indexes(self.repo)
-
-        result = search_repository(self.repo, query="What is a persistent wiki?")
-
-        self.assertEqual(
-            [item["concept_id"] for item in result["candidates"]],
-            ["concepts/persistence"],
-        )
-        self.assertEqual(result["candidates"][0]["matched_terms"], ["persistent", "wiki"])
-
-    def test_search_ignores_chinese_question_framing_and_single_characters(self) -> None:
-        concept = self.repo / "wiki/concepts/jvm-requirements.md"
-        concept.write_text(concept_text("SOFA4 JVM 要求"))
-        build_indexes(self.repo)
-
-        result = search_repository(self.repo, query="SOFA4 对 JVM 有什么要求")
-
-        self.assertEqual(
-            [item["concept_id"] for item in result["candidates"]],
-            ["concepts/jvm-requirements"],
-        )
-        self.assertEqual(result["candidates"][0]["matched_terms"], ["jvm", "sofa4", "要求"])
-
-    def test_search_suppresses_source_summary_when_answer_concept_covers_resource(self) -> None:
-        concept = self.repo / "wiki/concepts/extension-point.md"
-        concept.write_text(concept_text("Extension Point"))
-        summary = self.repo / "wiki/sources/extension-point.md"
-        summary.write_text(concept_text("Extension Point Source").replace("type: Concept", "type: Source Summary"))
-        build_indexes(self.repo)
-
-        result = search_repository(self.repo, query="extension point", limit=10)
-
-        self.assertEqual(
-            [item["concept_id"] for item in result["candidates"]],
-            ["concepts/extension-point"],
-        )
-        self.assertEqual(result["retrieval"]["suppressed_count"], 1)
-        self.assertEqual(result["retrieval"]["candidate_count"], 1)
-
-    def test_hydrates_explicit_concepts_in_caller_order_without_mutation(self) -> None:
-        first = self.repo / "wiki/concepts/compilation.md"
-        second = self.repo / "wiki/concepts/persistence.md"
-        first.write_text(concept_text("Incremental Compilation"))
-        second.write_text(concept_text("Persistent Wiki"))
-        build_indexes(self.repo)
-        before = {
-            path.relative_to(self.repo).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
-            for path in self.repo.rglob("*")
-            if path.is_file()
-        }
-
-        envelope = build_query_context(
-            self.repo,
-            query="persistent wiki compilation",
-            concept_ids=["concepts/persistence", "concepts/compilation", "concepts/persistence"],
-            max_chars=30_000,
-        )
-        repeated = build_query_context(
-            self.repo,
-            query="persistent wiki compilation",
-            concept_ids=["concepts/persistence", "concepts/compilation", "concepts/persistence"],
-            max_chars=30_000,
-        )
-
-        after = {
-            path.relative_to(self.repo).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
-            for path in self.repo.rglob("*")
-            if path.is_file()
-        }
-        self.assertEqual(envelope["schema_version"], "2")
-        self.assertEqual(envelope["mode"], "hydration")
-        self.assertEqual(envelope["repository"]["bundle"], "wiki")
-        self.assertEqual(envelope["repository"]["content_language"], "zh-CN")
-        self.assertEqual(envelope["repository"]["domain"], "research")
-        self.assertEqual(envelope["repository"]["okf_version"], "0.2")
-        self.assertEqual(envelope["repository"]["profile_version"], "0.1")
-        self.assertEqual(envelope["hydration"]["selected_count"], 2)
-        self.assertEqual(envelope["hydration"]["included_count"], 2)
-        self.assertTrue(envelope["hydration"]["complete_pages"])
-        self.assertEqual(envelope["concepts"][0]["concept_id"], "concepts/persistence")
-        self.assertIn("# Persistent Wiki", envelope["concepts"][0]["content"])
-        self.assertEqual(envelope["concepts"][1]["concept_id"], "concepts/compilation")
-        self.assertFalse(Path(envelope["concepts"][0]["path"]).is_absolute())
-        self.assertEqual(envelope, repeated)
-        self.assertEqual(before, after)
-
-    def test_discovery_score_does_not_choose_the_hydrated_knowledge_scope(self) -> None:
-        focused = self.repo / "wiki/concepts/focused.md"
-        focused.write_text(concept_text("Focused Answer"))
-        supporting = self.repo / "wiki/concepts/supporting.md"
-        supporting.write_text(
-            concept_text("Supporting Note").replace(
-                "Persistent Wiki knowledge compounds across questions.",
-                "This page mentions focused and answer separately.",
-            )
-        )
-        build_indexes(self.repo)
-
-        discovery = search_repository(self.repo, query="focused answer")
-        hydrated = build_query_context(
-            self.repo,
-            query="focused answer",
-            concept_ids=["concepts/supporting"],
-        )
-
-        self.assertEqual(discovery["candidates"][0]["concept_id"], "concepts/focused")
-        self.assertEqual(
-            [item["concept_id"] for item in hydrated["concepts"]],
-            ["concepts/supporting"],
-        )
-        self.assertNotIn("score", hydrated["concepts"][0])
-
-    def test_hydration_enforces_atomic_character_and_selection_limits(self) -> None:
-        (self.repo / "wiki/concepts/compilation.md").write_text(concept_text())
-        (self.repo / "wiki/concepts/persistence.md").write_text(concept_text("Persistent Wiki"))
-        build_indexes(self.repo)
-
-        with self.assertRaisesRegex(ADWikiError, "exceeds max-chars"):
-            build_query_context(
-                self.repo,
-                query="persistent wiki",
-                concept_ids=["concepts/compilation"],
-                max_chars=20,
-            )
-
-        many = []
-        for index in range(9):
-            concept_id = f"concepts/page-{index}"
-            (self.repo / f"wiki/{concept_id}.md").write_text(concept_text(f"Page {index}"))
-            many.append(concept_id)
-        with self.assertRaisesRegex(ADWikiError, "at most 8 Concepts"):
-            build_query_context(self.repo, query="pages", concept_ids=many)
-
-    def test_query_context_rejects_out_of_range_limits(self) -> None:
-        for value in (0, 1_000_001):
-            with self.subTest(max_chars=value):
-                with self.assertRaisesRegex(ADWikiError, "max-chars"):
-                    build_query_context(
-                        self.repo,
-                        query="wiki",
-                        concept_ids=["concepts/missing"],
-                        max_chars=value,
-                    )
-        with self.assertRaisesRegex(ADWikiError, "at least one --concept"):
-            build_query_context(self.repo, query="wiki", concept_ids=[])
-
-    def test_hydration_rejects_hidden_reserved_and_symlinked_bundle_markdown(self) -> None:
-        hidden = self.repo / "wiki/.private/secret.md"
-        hidden.parent.mkdir()
-        hidden.write_text(concept_text("Secret Wiki"))
-        visible = self.repo / "wiki/concepts/visible.md"
-        visible.write_text(concept_text("Visible Wiki"))
-        build_indexes(self.repo)
-
-        with self.assertRaisesRegex(ADWikiError, "invalid query hydration Concept ID"):
-            build_query_context(
-                self.repo,
-                query="wiki",
-                concept_ids=[".private/secret"],
-            )
-        with self.assertRaisesRegex(ADWikiError, "not a readable Bundle Concept"):
-            build_query_context(self.repo, query="wiki", concept_ids=["index"])
-        for aliased_id in ("concepts//visible", "concepts/./visible"):
-            with self.subTest(concept_id=aliased_id):
-                with self.assertRaisesRegex(ADWikiError, "invalid query hydration Concept ID"):
-                    build_query_context(self.repo, query="wiki", concept_ids=[aliased_id])
-
-        linked = self.repo / "wiki/concepts/linked.md"
-        try:
-            linked.symlink_to(visible)
-        except (OSError, NotImplementedError):
-            self.skipTest("symlinks unavailable")
-        with self.assertRaisesRegex(ADWikiError, "must not use a symlink"):
-            build_query_context(self.repo, query="wiki", concept_ids=["concepts/linked"])
-
-        envelope = build_query_context(
-            self.repo,
-            query="wiki",
-            concept_ids=["concepts/visible"],
-        )
-
-        self.assertEqual(
-            [item["concept_id"] for item in envelope["concepts"]],
-            ["concepts/visible"],
-        )
-
-    def test_discovery_represents_no_matches_without_any_body_content(self) -> None:
-        (self.repo / "wiki/concepts/compilation.md").write_text(concept_text())
-        build_indexes(self.repo)
-
-        catalog = search_repository(self.repo, query="unfindable-token")
-
-        self.assertEqual(catalog["retrieval"]["candidate_count"], 0)
-        self.assertEqual(catalog["retrieval"]["returned_count"], 0)
-        self.assertEqual(catalog["candidates"], [])
-
-    def test_query_protocol_refuses_an_explicitly_unsupported_okf_version(self) -> None:
-        concept = self.repo / "wiki/concepts/compilation.md"
-        concept.write_text(concept_text())
-        (self.repo / "wiki/index.md").write_text('---\nokf_version: "9.9"\n---\n')
-
-        with self.assertRaisesRegex(ADWikiError, "unsupported OKF version 9.9"):
-            search_repository(self.repo, query="wiki")
-        with self.assertRaisesRegex(ADWikiError, "unsupported OKF version 9.9"):
-            build_query_context(
-                self.repo,
-                query="wiki",
-                concept_ids=["concepts/compilation"],
-            )
-
     def test_raw_fallback_reads_only_registered_sources_linked_by_selected_concepts(self) -> None:
         source = self.register()
         concept = self.repo / "wiki/concepts/compilation.md"
@@ -935,7 +652,6 @@ class RepositoryIsolationTests(unittest.TestCase):
             staged = repo_a / ".ad-wiki/runs/run-team-a/staged/wiki/concepts/team-a.md"
             staged.parent.mkdir(parents=True, exist_ok=True)
             staged.write_text(concept_text("Team A"))
-            approve_run(repo_a, run_id="run-team-a")
             apply_run(repo_a, run_id="run-team-a")
             after_b = {
                 path.relative_to(repo_b).as_posix(): path.read_bytes()

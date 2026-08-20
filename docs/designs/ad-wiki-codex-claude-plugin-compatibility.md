@@ -1,5 +1,7 @@
 # Technical Design: AD-Wiki Codex / Claude Code 双宿主 Plugin
 
+> 本文保留 v0.3 双宿主打包决策。查询与写入行为以 [AD-Wiki 模型直读导航 v1.2](ad-wiki-model-navigation-v1.2.md) 和当前 Product Contract 为准；旧搜索与审批描述不再构成 Runtime 合同。
+
 Design identity: `ad-wiki-dual-host-plugin-v0.3-accepted`
 
 Product Contract: `docs/product-specs/ad-wiki-repository-local-scope.md`

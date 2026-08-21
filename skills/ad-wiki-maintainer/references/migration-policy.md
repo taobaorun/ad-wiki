@@ -28,4 +28,4 @@ After migration:
 
 Plugin upgrades never trigger migration automatically. Each knowledge repository owner chooses when to migrate.
 
-The `1.2.0` Plugin intentionally keeps AD-Wiki Profile `0.1`. Removing deterministic Wiki discovery and hydration is a breaking Plugin API change, not a knowledge-repository data migration. The migration command returns `status: current` for Profile `0.1` and refuses every unregistered path. A future data release must add and test an exact source-to-target transform before advertising that migration.
+The `1.3.0` Plugin intentionally keeps AD-Wiki Profile `0.1`. Adding canonical static Agent entry files is additive repository initialization behavior, not a knowledge-data migration. Existing repositories may rerun Init with their exact domain and language to add missing entry files; non-identical existing files are never overwritten. The migration command returns `status: current` for Profile `0.1` and refuses every unregistered path. A future data release must add and test an exact source-to-target transform before advertising that migration.

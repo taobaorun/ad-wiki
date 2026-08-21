@@ -3,4 +3,4 @@
 Domain: llm-wiki
 
 Record only domain-specific terminology, page granularity, and review rules here.
-The installed AD-Wiki Plugin owns the reusable workflow.
+Root AGENTS.md owns portable Query rules; the installed AD-Wiki Plugin owns maintenance workflows.

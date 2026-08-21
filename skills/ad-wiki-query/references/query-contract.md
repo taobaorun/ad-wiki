@@ -8,7 +8,7 @@ Use one AD Wiki as persistent compiled knowledge. The model navigates the Bundle
 
 - Read `ad-wiki.yaml` and the Bundle-root `index.md` before broad exploration.
 - Follow directory indexes and explicit Markdown links to narrow the semantic area.
-- Search only Bundle Markdown. Prefer `rg`; use an equivalent host search tool when unavailable.
+- Search only Bundle Markdown with any available file-reading or repository-search capability. Shell or script execution is optional, never a prerequisite. Prefer `rg` when available; use an equivalent host tool otherwise.
 - Let the model choose and read relevant pages. No deterministic scorer, candidate catalog, hydration envelope, Top-K rule, score threshold, or pre-model character budget defines the knowledge boundary.
 - Refine search terms when the first pass is insufficient. Identifiers, domain synonyms, titles, descriptions, tags, paths, headings, and source IDs are useful navigation signals.
 - Treat search matches as navigation evidence, not factual proof. Claims come from the pages actually read.
@@ -26,7 +26,7 @@ The default local strategy is intended for Wikis up to roughly one thousand page
 
 ## Bounded Raw fallback
 
-Normal Query trusts compiled Bundle pages and does not inspect Raw. For one narrow missing detail, the Agent may call `query_registered_raw.py` with a relevant Concept ID already read for the current question. The command resolves only linked registered sources, verifies selected bytes, rejects path and symlink escapes, and returns bounded excerpts. It never scans unrelated Raw or mutates the repository.
+Normal Query trusts compiled Bundle pages and does not inspect Raw. For one narrow missing detail, an Agent with command execution may call `query_registered_raw.py` with a relevant Concept ID already read for the current question. The command resolves only linked registered sources, verifies selected bytes, rejects path and symlink escapes, and returns bounded excerpts. It never scans unrelated Raw or mutates the repository. An Agent without command execution skips fallback and reports the compiled knowledge gap.
 
 Do not fallback for broad synthesis, absent source clues, conflicts, freshness-sensitive claims, or high-risk conclusions. A fallback answer identifies temporary Raw-backed evidence and does not present it as already compiled Wiki knowledge.
 

@@ -30,6 +30,8 @@ class CLILifecycleTests(unittest.TestCase):
         initialized = self.run_cli("init_bundle.py", "--repo", str(self.repo), "--domain", "research")
         self.assertEqual(initialized["status"], "created")
         self.assertEqual(json.loads((self.repo / "ad-wiki.yaml").read_text())["content_language"], "zh-CN")
+        self.assertTrue((self.repo / "AGENTS.md").is_file())
+        self.assertEqual((self.repo / "CLAUDE.md").read_text(), "# AD Wiki\n\n@AGENTS.md\n")
 
         source = self.repo / "raw/inbox/paper.md"
         source.write_text("paper contents\n")

@@ -142,7 +142,7 @@ claude plugin marketplace add <distribution-repo>
 claude plugin install ad-wiki@ad-wiki-team
 ```
 
-Claude Code 中显式调用名为 `/ad-wiki:ad-wiki-maintainer`；自动触发仍由 canonical Skill 的 `description` 决定。Codex 继续通过相同 Skill 名与描述发现能力。
+Claude Code 中显式调用名包括 `/ad-wiki:ad-wiki-query` 与 `/ad-wiki:ad-wiki-maintainer`；Plugin 自动触发仍使用 canonical Skill 的 `description`。初始化后的知识仓库另以 canonical `AGENTS.md` 和只导入它的 `CLAUDE.md` 建立静态 Query 身份，因此 compiled Query 不以 Plugin 自动触发、Shell 或脚本执行为前提；Codex、Claude Code 和其他能读取项目说明的 Agent 复用同一仓库契约。
 
 安装命令修改用户或项目的宿主配置，因此发行测试只在隔离的临时用户/容器中执行；Plugin 自身永不自动注册 Marketplace、修改宿主全局设置或替团队选择安装 scope。
 

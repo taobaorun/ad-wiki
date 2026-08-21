@@ -14,7 +14,7 @@ MAINTAINER_SKILL_ROOT = PLUGIN_ROOT / "skills/ad-wiki-maintainer"
 QUERY_SKILL_ROOT = PLUGIN_ROOT / "skills/ad-wiki-query"
 sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
 
-from ad_wiki.core import PLUGIN_VERSION, validate_repository  # noqa: E402
+from ad_wiki.core import PLUGIN_VERSION, STATIC_AGENT_FILES, validate_repository  # noqa: E402
 from ad_wiki.doctor import inspect_plugin  # noqa: E402
 
 
@@ -126,6 +126,8 @@ class PackagingTests(unittest.TestCase):
         self.assertIn("Compiled hit", skill)
         self.assertIn("Bounded Raw fallback", skill)
         self.assertIn("Knowledge gap", skill)
+        self.assertIn("Shell or script execution is optional", skill)
+        self.assertIn("Do not substitute model memory", skill)
         self.assertIn("Never emit an absolute local path", skill)
         self.assertIn("reuse the current evidence", skill)
         self.assertIn("--concept <concept-id>", skill)
@@ -228,6 +230,8 @@ class PackagingTests(unittest.TestCase):
         report = validate_repository(example, today=date(2026, 8, 15))
         self.assertTrue(report["ok"], report)
         self.assertEqual(json.loads((example / "ad-wiki.yaml").read_text())["content_language"], "en")
+        for relative, expected in STATIC_AGENT_FILES.items():
+            self.assertEqual((example / relative).read_text(), expected)
         self.assertTrue((example / "wiki/index.md").is_file())
         self.assertTrue((example / ".ad-wiki/source-registry.json").is_file())
 

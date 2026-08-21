@@ -1,0 +1,3 @@
+# AD Wiki
+
+@AGENTS.md

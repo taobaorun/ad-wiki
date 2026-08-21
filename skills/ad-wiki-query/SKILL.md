@@ -1,26 +1,26 @@
 ---
 name: ad-wiki-query
-description: Answer questions from one initialized AD Wiki by navigating its indexes, searching repository-local Markdown, and reading the Concepts the model judges relevant. Use when a user asks to find, compare, explain, summarize, or assess compiled Wiki knowledge without changing the repository.
+description: Query compiled knowledge in the current or explicitly selected AD Wiki. Always use when a repository contains ad-wiki.yaml and the user asks a factual, conceptual, explanatory, comparative, troubleshooting, or procedural question related to its domain, even when the user does not mention the Wiki or this Skill.
 ---
 
 # AD Wiki Query
 
 Answer from the explicitly selected knowledge repository. Treat the installed Plugin as read-only safety capability and the repository's OKF Bundle as persistent compiled knowledge.
 
-## Resolve the packaged runtime
+## Resolve the repository and optional fallback runtime
 
-1. In Claude Code, use `${CLAUDE_SKILL_DIR}`. In Codex, use the absolute directory containing this installed `SKILL.md` as supplied by the Skill runtime.
-2. Normalize `<plugin-root>` as the Skill directory's `parent.parent`.
-3. Require `<plugin-root>/scripts/query_registered_raw.py` plus the current host manifest. Stop if a required path is missing; do not scan unrelated directories for another installation.
-4. Keep the target Wiki separate and explicit as `<repo>`.
+1. Use the current repository when it contains `ad-wiki.yaml`; otherwise require an explicit `<repo>`.
+2. Read and follow the repository's `AGENTS.md` when present. It is the portable query contract for Agents that do not have this Skill or command execution.
+3. Keep the target Wiki separate and explicit. Do not scan unrelated directories for another Wiki.
+4. Resolve the packaged runtime only if bounded Raw fallback becomes necessary and command execution is available. In Claude Code, use `${CLAUDE_SKILL_DIR}`. In Codex, use the absolute directory containing this installed `SKILL.md`; normalize `<plugin-root>` as the Skill directory's `parent.parent` and require `<plugin-root>/scripts/query_registered_raw.py` plus the current host manifest.
 
-Never resolve packaged commands relative to the knowledge repository's working directory.
+Never resolve packaged commands relative to the knowledge repository's working directory. A missing or unavailable packaged command disables Raw fallback; it must not block compiled Wiki queries.
 
 ## Navigate the compiled Wiki directly
 
 1. Read `<repo>/ad-wiki.yaml`, resolve `bundle_root` and `content_language`, then read the Bundle-root `index.md`.
 2. Follow relevant directory indexes before opening many pages. Titles, descriptions, paths, types, tags, links, and source IDs are navigation evidence, not proof.
-3. Search only inside the resolved Bundle. Prefer `rg` when available; use the host's equivalent repository-local text search otherwise. Start with the user's important terms, identifiers, and likely synonyms. For example:
+3. Search only inside the resolved Bundle using any available file-reading or repository-search capability. Shell or script execution is optional and never a prerequisite. Prefer `rg` when available; otherwise use the host's equivalent. Start with the user's important terms, identifiers, and likely synonyms. For example:
 
    ```bash
    rg -n --glob '*.md' '启动失败|common-error|启动日志' <repo>/<bundle-root>
@@ -34,7 +34,7 @@ For a follow-up that only asks to shorten, reformat, clarify, or explain the sam
 ## Choose one evidence path
 
 1. **Compiled hit:** the Concepts sufficiently answer the question. Answer from them and do not inspect Raw.
-2. **Bounded Raw fallback:** a relevant Concept identifies source provenance but omits one narrow fact or procedure. Run at most once:
+2. **Bounded Raw fallback:** a relevant Concept identifies source provenance but omits one narrow fact or procedure. When command execution and the packaged runtime are available, run at most once:
 
    ```bash
    python3 <plugin-root>/scripts/query_registered_raw.py \
@@ -43,7 +43,7 @@ For a follow-up that only asks to shorten, reformat, clarify, or explain the sam
      --max-sources 2 --max-chars 6000 --json
    ```
 
-   Pass only Concept IDs actually read for the current question. Do not replace `--concept` with a Raw directory scan or direct Raw grep.
+   Pass only Concept IDs actually read for the current question. Do not replace `--concept` with a Raw directory scan or direct Raw grep. When command execution is unavailable, skip fallback and report the knowledge gap.
 3. **Knowledge gap:** do not inspect broad or unrelated Raw when the Wiki lacks a relevant Concept, provenance is absent, evidence conflicts, freshness is material, or a high-risk conclusion needs formal review. Say the Wiki does not currently answer it.
 
 Raw fallback is a cache miss, not validation of the Wiki. Never call it merely to recheck an adequate Concept.
@@ -53,9 +53,10 @@ Raw fallback is a cache miss, not validation of the Wiki. Never call it merely t
 1. Lead with the answer and use the repository's `content_language`.
 2. Cite material claims as repository-relative Concept paths plus relevant `sources[].id`. Never emit an absolute local path or `file://` URI.
 3. Distinguish source statements, Wiki inference, and Raw fallback only where it affects trust. Surface contradictions, missing evidence, stale status, partial source coverage, and uncertainty instead of smoothing them away.
-4. Do not print search commands, match counts, internal codes, or selection traces by default.
-5. For Raw fallback, state briefly that the compiled Wiki lacked the detail and the answer used a registered Raw source.
-6. Add a concise `writeback candidate` only after Raw fallback, a knowledge gap, a contradiction, or genuinely reusable synthesis absent from the Wiki.
+4. Do not substitute model memory for missing Wiki evidence. Optional outside-Wiki context must be explicitly requested and clearly labeled.
+5. Do not print search commands, match counts, internal codes, or selection traces by default.
+6. For Raw fallback, state briefly that the compiled Wiki lacked the detail and the answer used a registered Raw source.
+7. Add a concise `writeback candidate` only after Raw fallback, a knowledge gap, a contradiction, or genuinely reusable synthesis absent from the Wiki.
 
 ## Preserve the read-only boundary
 

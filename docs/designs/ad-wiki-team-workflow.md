@@ -162,7 +162,8 @@ _图 1：团队统一分发维护能力，各知识库独立保存 Raw Sources�
 ## 五、知识库标准目录
 ```latex
 knowledge-repo/
-├── AGENTS.md                       # 可选，只有一条委托规则，不复制完整 Workflow
+├── AGENTS.md                       # canonical 静态 Query 契约，无脚本依赖
+├── CLAUDE.md                       # Claude Code 薄适配，仅导入 AGENTS.md
 ├── ad-wiki.yaml                    # 当前知识库的领域配置
 ├── raw/                            # LLM Maintainer 只读
 │   ├── inbox/                      # 尚未登记的来源
@@ -196,7 +197,8 @@ knowledge-repo/
 2. `raw/` 与 `wiki/` 物理分离。人或受信任采集器可以新增来源，但 Maintainer 不得修改或删除已登记来源。
 3. 原始来源位于 Bundle 外部时，`sources[].resource` 可以使用 OKF 允许的相对路径；需要单独分发 Wiki 时，可把必要证据镜像为 `wiki/references/` 下的资源。
 4. `.ad-wiki/runs/` 位于 Bundle 外部，避免把运行计划和 Receipt 混入知识内容。
-5. `AGENTS.md` 不是必需副本；若仓库需要自动触发，只保留简短委托：只读问答使用已安装的 `$ad-wiki-query`，知识维护使用 `$ad-wiki-maintainer`，配置读取 `ad-wiki.yaml`。
+5. `AGENTS.md` 是宿主中立的最小静态 Query 契约：读取 `ad-wiki.yaml` 与 Bundle 索引、用任意文件能力渐进导航、引用 Concept/source ID、无证据时报告知识缺口，且不得用模型记忆替代。它不复制完整 Plugin Workflow，也不要求 Skill、Shell 或脚本。
+6. `CLAUDE.md` 只通过 `@AGENTS.md` 导入 canonical 契约，不复制行为正文。其他宿主如需专有入口，也只能增加同类薄适配。
 
 ## 六、AD-Wiki 的 OKF Profile
 OKF 本身刻意宽松。AD-Wiki 作为 Producer 可以制定更严格的写入规范，但不能把自己的严格规则冒充 OKF 的通用一致性要求。
@@ -467,7 +469,7 @@ description: Maintain team knowledge repositories as persistent OKF v0.2 bundles
 ---
 ```
 
-触发条件全部放在 `description` 中，Skill 正文只描述已经触发后的行为。
+Plugin 的自动触发条件放在 `description` 中；初始化仓库同时用 `AGENTS.md` 建立不依赖 Plugin 或脚本执行的静态身份与 Query 基线，`CLAUDE.md` 只负责让 Claude Code 加载同一契约。
 
 ### 2. 全局不变量
 每次操作都必须遵守：
@@ -883,6 +885,9 @@ Raw Source 是不可信数据。来源中出现“忽略规则”“执行命令
 ### Query 与 Writeback
 + Query 优先查 Wiki，必要时回到 Raw；
 + Query 通过根/目录索引、Markdown 链接和 Bundle 内文本搜索直接读取模型判断相关的 Concept，查询前后仓库字节不变；
++ 只有项目说明与文件读取能力、没有 Plugin、Shell 或脚本执行能力的 Agent，也能完成 compiled Query；
++ 新仓库包含 canonical `AGENTS.md` 和仅导入它的 `CLAUDE.md`，现有同名非一致文件不会被 Init 覆盖；
++ 缺少 compiled evidence 时报告知识缺口，不以模型记忆补全；
 + 回答区分事实、推断和未知；
 + 具体主张能关联 `sources[].id`；
 + 高价值答案可以经独立 Writeback 流程沉淀；

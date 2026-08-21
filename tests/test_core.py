@@ -46,6 +46,14 @@ class InitializeRepositoryTests(RepositoryTestCase):
         self.assertTrue((self.repo / "wiki/concepts").is_dir())
         self.assertTrue((self.repo / ".ad-wiki/runs").is_dir())
 
+        agent_entry = (self.repo / "AGENTS.md").read_text()
+        self.assertIn("This repository is an AD Wiki", agent_entry)
+        self.assertIn("Read `ad-wiki.yaml`", agent_entry)
+        self.assertIn("Shell or script execution is optional", agent_entry)
+        self.assertIn("Do not substitute model memory", agent_entry)
+        self.assertIn("Do not inspect Raw for an ordinary Query", agent_entry)
+        self.assertEqual((self.repo / "CLAUDE.md").read_text(), "# AD Wiki\n\n@AGENTS.md\n")
+
         config = json.loads((self.repo / "ad-wiki.yaml").read_text())
         self.assertEqual(config["profile_version"], "0.1")
         self.assertEqual(config["bundle_root"], "wiki")
@@ -106,6 +114,15 @@ class InitializeRepositoryTests(RepositoryTestCase):
         with self.assertRaisesRegex(ADWikiError, "refusing to overwrite"):
             self.init_repo()
 
+    def test_refuses_to_overwrite_existing_agent_instructions(self) -> None:
+        (self.repo / "AGENTS.md").write_text("user-owned instructions\n")
+
+        with self.assertRaisesRegex(ADWikiError, "refusing to overwrite non-identical file: AGENTS.md"):
+            self.init_repo()
+
+        self.assertFalse((self.repo / "ad-wiki.yaml").exists())
+        self.assertFalse((self.repo / "wiki").exists())
+
     def test_init_accepts_legacy_review_and_search_config_without_rewriting_it(self) -> None:
         self.init_repo()
         config_path = self.repo / "ad-wiki.yaml"
@@ -123,6 +140,23 @@ class InitializeRepositoryTests(RepositoryTestCase):
 
         self.assertEqual(result["status"], "unchanged")
         self.assertEqual(config_path.read_bytes(), before)
+
+    def test_validation_warns_when_legacy_repository_lacks_static_agent_entry(self) -> None:
+        self.init_repo()
+        (self.repo / "AGENTS.md").unlink()
+        (self.repo / "CLAUDE.md").unlink()
+
+        report = validate_repository(self.repo)
+
+        self.assertTrue(report["ok"], report)
+        warnings = {item["path"]: item["code"] for item in report["warnings"]}
+        self.assertEqual(warnings["AGENTS.md"], "ADW-W270")
+        self.assertEqual(warnings["CLAUDE.md"], "ADW-W270")
+
+        repaired = self.init_repo()
+        self.assertEqual(repaired["status"], "created")
+        self.assertEqual(repaired["created"], ["AGENTS.md", "CLAUDE.md"])
+        self.assertEqual(validate_repository(self.repo)["warnings"], [])
 
     def test_preflights_file_conflicts_before_creating_directories(self) -> None:
         (self.repo / "ad-wiki.yaml").write_text("user-owned\n")

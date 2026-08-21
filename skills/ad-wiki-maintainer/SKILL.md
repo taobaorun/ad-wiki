@@ -37,7 +37,7 @@ If the repository is not initialized and the user asks to create it, use `<plugi
 - Preserve unknown OKF frontmatter fields when editing.
 - Write generated titles, descriptions, prose, Index/Log-facing text, and default answers in `content_language`. Preserve Raw text, code, quotations, identifiers, frontmatter keys, and existing paths exactly.
 - Let `apply_run.py` update indexes and prepend the ISO-date log entry; never stage reserved files.
-- Do not create or update host memory, `CLAUDE.md`, `AGENTS.md`, global configuration, or files outside the selected repository unless the user explicitly asks.
+- Do not create or update host memory, `CLAUDE.md`, `AGENTS.md`, global configuration, or files outside the selected repository outside Init unless the user explicitly asks. Init owns only the canonical static `AGENTS.md` and thin `CLAUDE.md` adapter and never overwrites non-identical existing files.
 - Explain progress and completion in the user's language. Keep risk classes, OKF types, run states, validation codes, and other protocol terms internal unless they resolve a real decision or failure.
 - Never call an import complete while requested knowledge is missing, any required source was only partially read, or reusable source material remains only in Raw. State the usable result and remaining knowledge plainly.
 - Do not commit, push, open a PR, install a Marketplace, delete content, or change permissions without explicit user authority.
@@ -48,7 +48,7 @@ Read [OKF Profile](references/okf-profile.md) before writing Concepts. Read [Wor
 
 ### Init
 
-Run `<plugin-root>/scripts/init_bundle.py --repo <repo> --domain <whole-wiki-domain> --language <language> --json`, inspect the created paths and warnings, then run validation. Use an explicit user-selected `zh-CN` or `en`; otherwise use `zh-CN`. Do not overwrite existing non-identical files.
+Run `<plugin-root>/scripts/init_bundle.py --repo <repo> --domain <whole-wiki-domain> --language <language> --json`, inspect the created paths and warnings, then run validation. Use an explicit user-selected `zh-CN` or `en`; otherwise use `zh-CN`. Init creates the portable static query contract in `AGENTS.md` and a thin Claude Code adapter in `CLAUDE.md`; it does not copy the full Plugin workflow. Do not overwrite existing non-identical files. Rerunning Init with an existing repository's exact domain and language may add missing canonical entry files without rewriting compatible content.
 
 ### Ingest
 
@@ -79,7 +79,7 @@ Run `<plugin-root>/scripts/migrate_bundle.py` to inspect the requested target. I
 
 ## Deterministic commands
 
-- `init_bundle.py`: create a minimal repository structure with `content_language`.
+- `init_bundle.py`: create a minimal repository structure with `content_language` and static Agent entry files.
 - `register_source.py`: hash and register immutable sources idempotently.
 - `validate_bundle.py`: validate OKF structure and the AD-Wiki profile.
 - `build_index.py`: regenerate deterministic directory indexes.

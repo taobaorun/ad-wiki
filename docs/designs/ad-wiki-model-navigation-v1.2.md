@@ -86,5 +86,5 @@ BM25、中文 bigram、长度归一化、向量检索、重排和 Search MCP 均
 
 - 静态：删除的脚本、Runtime exports、Skill 引用和 search 配置不存在。
 - Runtime：Raw fallback、直接 Apply、旧事务、路径隔离、回滚、coverage 与链接校验通过。
-- Packaging：两个 Manifest 同为 `1.2.0`，Plugin doctor 和模板检查通过。
+- Packaging：两个 Manifest 同为 `1.3.0`，Plugin doctor 和模板检查通过。
 - 行为：有 Plugin Agent 与只有项目说明/文件读取能力的无脚本 Agent，都能通过 index + Bundle Markdown 回答代表性问题；Query 字节只读；Maintainer 检查 staged diff，不写运行时 host memory，不把 partial 报告成完成。

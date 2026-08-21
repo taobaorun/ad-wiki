@@ -29,7 +29,7 @@ sources:
     title: Source title
     author: human:owner
 generated:
-  by: ad-wiki/1.2.0
+  by: ad-wiki/1.3.0
   at: 2026-08-15T10:00:00Z
 status: draft
 stale_after: 2027-02-15

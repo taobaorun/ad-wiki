@@ -12,6 +12,7 @@ from pathlib import Path
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 MAINTAINER_SKILL_ROOT = PLUGIN_ROOT / "skills/ad-wiki-maintainer"
 QUERY_SKILL_ROOT = PLUGIN_ROOT / "skills/ad-wiki-query"
+CODE_WIKI_SKILL_ROOT = PLUGIN_ROOT / "skills/ad-code-wiki"
 sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
 
 from ad_wiki.core import PLUGIN_VERSION, STATIC_AGENT_FILES, validate_repository  # noqa: E402
@@ -22,7 +23,7 @@ class PackagingTests(unittest.TestCase):
     def test_dual_host_plugin_contracts_share_one_release_identity(self) -> None:
         codex = json.loads((PLUGIN_ROOT / ".codex-plugin/plugin.json").read_text())
         claude = json.loads((PLUGIN_ROOT / ".claude-plugin/plugin.json").read_text())
-        self.assertEqual(PLUGIN_VERSION, "1.3.0")
+        self.assertEqual(PLUGIN_VERSION, "1.5.0")
 
         for manifest in (codex, claude):
             self.assertEqual(manifest["name"], "ad-wiki")
@@ -72,11 +73,12 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(codex_root, PLUGIN_ROOT)
         self.assertEqual(claude_root, PLUGIN_ROOT)
 
-    def test_plugin_root_is_flat_and_has_two_skills_with_one_runtime_core(self) -> None:
+    def test_plugin_root_is_flat_and_has_three_skills_with_one_runtime_core(self) -> None:
         self.assertFalse((PLUGIN_ROOT / "plugins").exists())
         self.assertTrue((PLUGIN_ROOT / "skills").is_dir())
         self.assertTrue((MAINTAINER_SKILL_ROOT / "SKILL.md").is_file())
         self.assertTrue((QUERY_SKILL_ROOT / "SKILL.md").is_file())
+        self.assertTrue((CODE_WIKI_SKILL_ROOT / "SKILL.md").is_file())
         self.assertEqual(
             list(PLUGIN_ROOT.rglob("skills/ad-wiki-maintainer/SKILL.md")),
             [MAINTAINER_SKILL_ROOT / "SKILL.md"],
@@ -84,6 +86,10 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(
             list(PLUGIN_ROOT.rglob("skills/ad-wiki-query/SKILL.md")),
             [QUERY_SKILL_ROOT / "SKILL.md"],
+        )
+        self.assertEqual(
+            list(PLUGIN_ROOT.rglob("skills/ad-code-wiki/SKILL.md")),
+            [CODE_WIKI_SKILL_ROOT / "SKILL.md"],
         )
         self.assertEqual(len(list(PLUGIN_ROOT.rglob("scripts/ad_wiki/core.py"))), 1)
 
@@ -151,6 +157,54 @@ class PackagingTests(unittest.TestCase):
         self.assertIn("$ad-wiki-query", openai)
         self.assertIn("allow_implicit_invocation: true", openai)
 
+    def test_code_wiki_skill_owns_full_inventory_enrichment(self) -> None:
+        skill = (CODE_WIKI_SKILL_ROOT / "SKILL.md").read_text()
+        self.assertNotIn("TODO", skill)
+        self.assertIn("every base Concept automatically evaluated", skill.split("---", 2)[1])
+        self.assertIn("prepare_code_wiki.py", skill)
+        self.assertIn("checkpoint_code_wiki.py", skill)
+        self.assertIn("finalize_code_wiki.py", skill)
+        self.assertIn("apply_run.py", skill)
+        self.assertIn("--structural-index", skill)
+        self.assertIn("query_code_index.py", skill)
+        self.assertIn("publish_code_bindings.py", skill)
+        self.assertIn("EXTRACTED | INFERRED | AMBIGUOUS", skill)
+        self.assertIn("Do not repair semantic Wiki content inside this run", skill)
+        self.assertIn("Mermaid", skill)
+        self.assertIn("tests were read but not executed", skill)
+        self.assertNotIn("Concept selector", skill)
+
+        contract = (CODE_WIKI_SKILL_ROOT / "references/code-wiki-contract.md").read_text()
+        self.assertIn("Evaluate every base Concept", contract)
+        self.assertIn("no-code-match", contract)
+        self.assertIn("wiki/implementations/<base-concept-id>.md", contract)
+        self.assertIn("Do not claim coverage of the full repository", contract)
+
+        for relative in (
+            "assets/implementation.md",
+            "assets/code-source-summary.md",
+            "assets/zh-CN/implementation.md",
+            "assets/zh-CN/code-source-summary.md",
+        ):
+            text = (CODE_WIKI_SKILL_ROOT / relative).read_text()
+            self.assertIn("code-wiki", text)
+            self.assertIn("ad-wiki/1.5.0", text)
+
+        openai = (CODE_WIKI_SKILL_ROOT / "agents/openai.yaml").read_text()
+        self.assertIn("$ad-code-wiki", openai)
+        self.assertIn("allow_implicit_invocation: true", openai)
+
+        pyproject = (PLUGIN_ROOT / "code-index/pyproject.toml").read_text()
+        self.assertIn('tree-sitter==0.25.2', pyproject)
+        self.assertIn('tree-sitter-java==0.23.5', pyproject)
+        self.assertNotIn("graphify", pyproject.lower())
+        self.assertTrue((PLUGIN_ROOT / "code-index/uv.lock").is_file())
+        runtime_text = "\n".join(
+            path.read_text()
+            for path in (PLUGIN_ROOT / "scripts/ad_wiki/code_index").glob("*.py")
+        )
+        self.assertNotIn("import graphify", runtime_text)
+
     def test_required_templates_exist_and_are_okf_shaped(self) -> None:
         templates = MAINTAINER_SKILL_ROOT / "assets/templates"
         for name, expected_type in {
@@ -183,6 +237,13 @@ class PackagingTests(unittest.TestCase):
             "approve_run.py",
             "apply_run.py",
             "review_run.py",
+            "prepare_code_wiki.py",
+            "checkpoint_code_wiki.py",
+            "finalize_code_wiki.py",
+            "build_code_index.py",
+            "query_code_index.py",
+            "inspect_code_impact.py",
+            "publish_code_bindings.py",
             "query_registered_raw.py",
             "doctor_plugin.py",
             "migrate_bundle.py",

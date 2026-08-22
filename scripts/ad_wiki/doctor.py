@@ -7,16 +7,23 @@ from typing import Any
 from .core import ADWikiError, PLUGIN_VERSION, validate_repository
 
 
-REQUIRED_SKILLS = ("ad-wiki-maintainer", "ad-wiki-query")
+REQUIRED_SKILLS = ("ad-code-wiki", "ad-wiki-maintainer", "ad-wiki-query")
 REQUIRED_SCRIPTS = (
     "apply_run.py",
     "approve_run.py",
     "build_index.py",
+    "build_code_index.py",
+    "checkpoint_code_wiki.py",
     "doctor_plugin.py",
+    "finalize_code_wiki.py",
     "init_bundle.py",
     "migrate_bundle.py",
+    "prepare_code_wiki.py",
     "prepare_run.py",
     "query_registered_raw.py",
+    "query_code_index.py",
+    "inspect_code_impact.py",
+    "publish_code_bindings.py",
     "raw_diff_guard.py",
     "register_source.py",
     "review_run.py",
@@ -95,6 +102,16 @@ def inspect_plugin(
             errors.append(f"missing packaged command: {script}")
     if not (root / "scripts/ad_wiki/core.py").is_file():
         errors.append("missing canonical Runtime core")
+    for relative in (
+        "code-index/pyproject.toml",
+        "code-index/uv.lock",
+        "scripts/ad_wiki/code_index/model.py",
+        "scripts/ad_wiki/code_index/java.py",
+        "scripts/ad_wiki/code_index/cache.py",
+        "scripts/ad_wiki/code_index/query.py",
+    ):
+        if not (root / relative).is_file():
+            errors.append(f"missing structural code-index package file: {relative}")
 
     repository_report: dict[str, Any] | None = None
     if repo is not None:

@@ -14,6 +14,7 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 MAINTAINER_SKILL_ROOT = PLUGIN_ROOT / "skills/ad-wiki-maintainer"
 QUERY_SKILL_ROOT = PLUGIN_ROOT / "skills/ad-wiki-query"
 CODE_WIKI_SKILL_ROOT = PLUGIN_ROOT / "skills/ad-code-wiki"
+SHIP_SKILL_ROOT = PLUGIN_ROOT / "skills/ad-wiki-ship"
 sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
 
 from ad_wiki.core import PLUGIN_VERSION, STATIC_AGENT_FILES, validate_repository  # noqa: E402
@@ -24,7 +25,7 @@ class PackagingTests(unittest.TestCase):
     def test_dual_host_plugin_contracts_share_one_release_identity(self) -> None:
         codex = json.loads((PLUGIN_ROOT / ".codex-plugin/plugin.json").read_text())
         claude = json.loads((PLUGIN_ROOT / ".claude-plugin/plugin.json").read_text())
-        self.assertEqual(PLUGIN_VERSION, "1.6.0")
+        self.assertEqual(PLUGIN_VERSION, "1.7.0")
 
         for manifest in (codex, claude):
             self.assertEqual(manifest["name"], "ad-wiki")
@@ -74,12 +75,13 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(codex_root, PLUGIN_ROOT)
         self.assertEqual(claude_root, PLUGIN_ROOT)
 
-    def test_plugin_root_is_flat_and_has_three_skills_with_one_runtime_core(self) -> None:
+    def test_plugin_root_is_flat_and_has_four_skills_with_one_runtime_core(self) -> None:
         self.assertFalse((PLUGIN_ROOT / "plugins").exists())
         self.assertTrue((PLUGIN_ROOT / "skills").is_dir())
         self.assertTrue((MAINTAINER_SKILL_ROOT / "SKILL.md").is_file())
         self.assertTrue((QUERY_SKILL_ROOT / "SKILL.md").is_file())
         self.assertTrue((CODE_WIKI_SKILL_ROOT / "SKILL.md").is_file())
+        self.assertTrue((SHIP_SKILL_ROOT / "SKILL.md").is_file())
         self.assertEqual(
             list(PLUGIN_ROOT.rglob("skills/ad-wiki-maintainer/SKILL.md")),
             [MAINTAINER_SKILL_ROOT / "SKILL.md"],
@@ -91,6 +93,10 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(
             list(PLUGIN_ROOT.rglob("skills/ad-code-wiki/SKILL.md")),
             [CODE_WIKI_SKILL_ROOT / "SKILL.md"],
+        )
+        self.assertEqual(
+            list(PLUGIN_ROOT.rglob("skills/ad-wiki-ship/SKILL.md")),
+            [SHIP_SKILL_ROOT / "SKILL.md"],
         )
         self.assertEqual(len(list(PLUGIN_ROOT.rglob("scripts/ad_wiki/core.py"))), 1)
 
@@ -285,10 +291,30 @@ class PackagingTests(unittest.TestCase):
             "inspect_wiki_health.py",
             "doctor_plugin.py",
             "migrate_bundle.py",
+            "build_wiki_skill.py",
         ):
             self.assertTrue((scripts / name).is_file(), name)
         for removed in ("search_wiki.py", "build_query_context.py"):
             self.assertFalse((scripts / removed).exists(), removed)
+
+    def test_ship_skill_owns_local_read_only_skill_delivery(self) -> None:
+        skill = (SHIP_SKILL_ROOT / "SKILL.md").read_text()
+        self.assertIn("build_wiki_skill.py", skill)
+        self.assertIn("one standalone read-only Skill", skill)
+        self.assertIn("ad-${wiki-name}", skill)
+        self.assertIn("does not deploy", skill)
+        self.assertIn("canonical templates", skill)
+        self.assertNotIn("Writeback", skill)
+
+        openai = (SHIP_SKILL_ROOT / "agents/openai.yaml").read_text()
+        self.assertIn("$ad-wiki-ship", openai)
+        self.assertIn("allow_implicit_invocation: true", openai)
+        for relative in (
+            "assets/delivered-skill/SKILL.md.tmpl",
+            "assets/delivered-skill/openai.yaml.tmpl",
+            "assets/delivered-skill/query-contract.md",
+        ):
+            self.assertTrue((SHIP_SKILL_ROOT / relative).is_file(), relative)
 
     def test_maintainer_requires_model_navigation_and_atomic_compilation(self) -> None:
         skill = (MAINTAINER_SKILL_ROOT / "SKILL.md").read_text()

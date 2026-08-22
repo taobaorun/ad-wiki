@@ -7,11 +7,12 @@ from typing import Any
 from .core import ADWikiError, PLUGIN_VERSION, validate_repository
 
 
-REQUIRED_SKILLS = ("ad-code-wiki", "ad-wiki-maintainer", "ad-wiki-query")
+REQUIRED_SKILLS = ("ad-code-wiki", "ad-wiki-maintainer", "ad-wiki-query", "ad-wiki-ship")
 REQUIRED_SCRIPTS = (
     "apply_run.py",
     "approve_run.py",
     "build_index.py",
+    "build_wiki_skill.py",
     "build_code_index.py",
     "checkpoint_code_wiki.py",
     "doctor_plugin.py",

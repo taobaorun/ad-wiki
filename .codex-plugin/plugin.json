@@ -1,7 +1,7 @@
 {
   "name": "ad-wiki",
-  "version": "1.6.0",
-  "description": "Query, maintain, enrich, and assess independent team knowledge repositories as continuously compiled OKF bundles.",
+  "version": "1.7.0",
+  "description": "Query, maintain, enrich, assess, and deliver independent team knowledge repositories as continuously compiled OKF bundles.",
   "author": {
     "name": "AD Wiki Team"
   },
@@ -9,7 +9,7 @@
   "interface": {
     "displayName": "AD Wiki",
     "shortDescription": "只读查询并持续编译、校验和维护团队 OKF 知识库",
-    "longDescription": "Query compiled knowledge, maintain immutable-source knowledge, add revision-backed source implementation Companions, and emit evidence-linked Wiki health vectors for independent OKF bundles.",
+    "longDescription": "Query compiled knowledge, maintain immutable-source knowledge, add revision-backed source implementation Companions, emit evidence-linked Wiki health vectors, and build standalone read-only Wiki Skills.",
     "developerName": "AD Wiki Team",
     "category": "Productivity",
     "capabilities": ["Interactive", "Read", "Write"],
@@ -18,7 +18,8 @@
       "只读查询当前 AD Wiki，并返回带来源的答案。",
       "摄入一个新来源并生成可审查的知识变更。",
       "使用最新代码仓库为当前 AD Wiki 自动构建完整 Code Wiki 实现层。",
-      "巡检当前 Wiki 的结构、来源、冲突与时效性。"
+      "巡检当前 Wiki 的结构、来源、冲突与时效性。",
+      "把构建完成的 Wiki 交付为一个独立只读 Skill。"
     ]
   }
 }

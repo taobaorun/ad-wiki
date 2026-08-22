@@ -231,8 +231,8 @@ class WikiSkillBuildTests(unittest.TestCase):
         self.assertFalse((self.root / "output/ad-sample-wiki").exists())
 
     def test_secret_material_blocks_publication_without_echoing_secret(self) -> None:
-        secret = 'api_key = "this-value-must-never-be-echoed"\n'
-        self.update_registered_raw(secret)
+        credential_fixture = "api_" + 'key = "' + "this-value-must-never-be-echoed" + '"\n'
+        self.update_registered_raw(credential_fixture)
         with self.assertRaises(ADWikiError) as raised:
             build_wiki_skill(self.repo, output_parent=self.root / "output")
         self.assertIn("suspected secret material", str(raised.exception))

@@ -1,0 +1,6 @@
+interface:
+  display_name: "AD Wiki Ship"
+  short_description: "Build one Wiki as a standalone read-only Skill"
+  default_prompt: "Use $ad-wiki-ship to build this completed AD Wiki as one local read-only Skill."
+policy:
+  allow_implicit_invocation: true

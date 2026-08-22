@@ -20,6 +20,7 @@ from .core import (
     write_run_report,
 )
 from .doctor import inspect_plugin
+from .delivery import build_wiki_skill
 from .health import inspect_wiki_health
 from .code_wiki import (
     checkpoint_code_wiki,
@@ -449,6 +450,24 @@ def health_main(argv: Sequence[str] | None = None) -> int:
         return payload, exit_code
 
     return _execute(parser, runner, argv)
+
+
+def ship_main(argv: Sequence[str] | None = None) -> int:
+    parser = _base_parser("Build one standalone read-only Skill from a validated AD Wiki.")
+    parser.add_argument("--output", required=True, help="explicit parent directory for the generated Skill")
+    parser.add_argument("--wiki-name", help="explicit Wiki delivery identity; defaults to repository basename")
+    return _execute(
+        parser,
+        lambda args: (
+            build_wiki_skill(
+                args.repo,
+                output_parent=args.output,
+                wiki_name=args.wiki_name,
+            ),
+            0,
+        ),
+        argv,
+    )
 
 
 def migrate_main(argv: Sequence[str] | None = None) -> int:

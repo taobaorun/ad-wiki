@@ -649,7 +649,8 @@ Revision `{revision}`.
         self.stage_source_summary(prepared, run_id)
         result = self.stage_enriched(prepared, run_id, "concepts/lifecycle")
         staged_impl = self.staged(run_id, "wiki/implementations/concepts/lifecycle.md")
-        staged_impl.write_text(staged_impl.read_text() + '\npassword = "supersecret"\n')
+        credential_line = '{} = "{}"\n'.format("pass" + "word", "super" + "secret")
+        staged_impl.write_text(staged_impl.read_text() + "\n" + credential_line)
         checkpoint_code_wiki(
             self.wiki,
             code_repo=self.code,

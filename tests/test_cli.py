@@ -219,6 +219,44 @@ Knowledge is compiled once and maintained.[^paper]
         self.assertEqual(malformed["status"], "error")
         self.assertIn("malformed source registry record", malformed["error"])
 
+    def test_build_wiki_skill_cli_creates_one_standalone_skill(self) -> None:
+        source = PLUGIN_ROOT / "examples/minimal-wiki"
+        created = self.run_cli(
+            "build_wiki_skill.py",
+            "--repo",
+            str(source),
+            "--output",
+            str(self.repo),
+            "--wiki-name",
+            "LLM Wiki",
+        )
+        self.assertEqual(created["status"], "created")
+        self.assertEqual(created["skill_name"], "ad-llm-wiki")
+        self.assertEqual(Path(created["output"]), self.repo / "ad-llm-wiki")
+        self.assertFalse(created["capabilities"]["writeback"])
+        unchanged = self.run_cli(
+            "build_wiki_skill.py",
+            "--repo",
+            str(source),
+            "--output",
+            str(self.repo),
+            "--wiki-name",
+            "LLM Wiki",
+        )
+        self.assertEqual(unchanged["status"], "unchanged")
+
+        failed = self.run_cli(
+            "build_wiki_skill.py",
+            "--repo",
+            str(source),
+            "--output",
+            str(self.repo),
+            "--wiki-name",
+            "invalid/name",
+            expected=2,
+        )
+        self.assertEqual(failed["status"], "error")
+
     def test_wiki_health_cli_reports_incomplete_and_supports_explicit_gate(self) -> None:
         self.run_cli("init_bundle.py", "--repo", str(self.repo), "--domain", "research")
         source = self.repo / "raw/inbox/paper.md"

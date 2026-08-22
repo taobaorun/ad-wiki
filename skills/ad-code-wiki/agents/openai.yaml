@@ -1,0 +1,6 @@
+interface:
+  display_name: "AD Code Wiki"
+  short_description: "Compile full-Wiki source implementation knowledge"
+  default_prompt: "Use $ad-code-wiki to enrich every Concept in this AD Wiki from the provided clean Git code repository."
+policy:
+  allow_implicit_invocation: true

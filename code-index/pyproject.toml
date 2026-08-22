@@ -1,0 +1,15 @@
+[project]
+name = "ad-wiki-code-index-runtime"
+version = "0.1.0"
+description = "Isolated structural-index dependencies for AD Code Wiki"
+requires-python = ">=3.10"
+dependencies = [
+  # Official APIs:
+  # https://github.com/tree-sitter/py-tree-sitter/blob/v0.25.2/README.md
+  # https://github.com/tree-sitter/tree-sitter-java/tree/v0.23.5
+  "tree-sitter==0.25.2",
+  "tree-sitter-java==0.23.5",
+]
+
+[tool.uv]
+package = false

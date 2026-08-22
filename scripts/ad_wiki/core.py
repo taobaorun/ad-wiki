@@ -11,7 +11,7 @@ from typing import Any, Iterable
 from urllib.parse import unquote
 
 
-PLUGIN_VERSION = "1.3.0"
+PLUGIN_VERSION = "1.5.0"
 PROFILE_VERSION = "0.1"
 OKF_VERSION = "0.2"
 
@@ -29,7 +29,7 @@ CONCEPT_DIRECTORIES = (
 
 ALLOWED_STATUS = {"draft", "stable", "deprecated"}
 ALLOWED_CONTENT_LANGUAGES = {"en", "zh-CN"}
-ALLOWED_OPERATIONS = {"init", "ingest", "query", "writeback", "lint", "migrate"}
+ALLOWED_OPERATIONS = {"code-wiki", "init", "ingest", "query", "writeback", "lint", "migrate"}
 ALLOWED_RISKS = {"low", "medium", "high", "prohibited"}
 ALLOWED_STATES = {
     "DISCOVERED",

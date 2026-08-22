@@ -43,7 +43,7 @@ from .core import (
 )
 
 
-WRITABLE_OPERATIONS = {"ingest", "writeback", "lint", "migrate"}
+WRITABLE_OPERATIONS = {"code-wiki", "ingest", "writeback", "lint", "migrate"}
 SEARCH_SEGMENT = re.compile(r"[a-z0-9][a-z0-9_-]*|[\u3400-\u9fff]+", re.IGNORECASE)
 QUERY_NOISE = (
     "告诉我",
@@ -495,6 +495,10 @@ def apply_run(repo: str | os.PathLike[str], *, run_id: str) -> dict[str, Any]:
     _, bundle, config = _configured_roots(root)
     _require_supported_profile(config)
     report = _load_run(root, run_id)
+    if report.get("operation") == "code-wiki":
+        code_wiki = report.get("code_wiki")
+        if not isinstance(code_wiki, dict) or not code_wiki.get("finalized"):
+            raise ADWikiError("Code Wiki run is not finalized")
     if report.get("status") in {"VALIDATED", "REVIEWED"}:
         _check_baseline(root, report.get("baseline_after", {}))
         raw_report = guard_raw(root)
@@ -518,6 +522,10 @@ def apply_run(repo: str | os.PathLike[str], *, run_id: str) -> dict[str, Any]:
             relative: hashlib.sha256(content).hexdigest()
             for relative, content in staged_bytes.items()
         }
+        if report.get("operation") == "code-wiki":
+            expected_hashes = report["code_wiki"].get("finalized_staged_hashes")
+            if staged_hashes != expected_hashes:
+                raise ADWikiError("Code Wiki staged content changed after Finalize")
         approved_staged_hashes = report.get("approved_staged_hashes")
         if approved_staged_hashes is not None and staged_hashes != approved_staged_hashes:
             raise ADWikiError("staged content changed after recorded approval")

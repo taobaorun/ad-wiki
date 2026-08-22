@@ -18,6 +18,13 @@ from .runtime import (
     review_run,
 )
 from .doctor import inspect_plugin
+from .code_wiki import (
+    checkpoint_code_wiki,
+    finalize_code_wiki,
+    inspect_code_repository,
+    prepare_code_wiki,
+    publish_code_wiki_bindings,
+)
 
 __all__ = [
     "ADWikiError",
@@ -34,4 +41,9 @@ __all__ = [
     "apply_run",
     "review_run",
     "migrate_repository",
+    "inspect_code_repository",
+    "checkpoint_code_wiki",
+    "finalize_code_wiki",
+    "prepare_code_wiki",
+    "publish_code_wiki_bindings",
 ]

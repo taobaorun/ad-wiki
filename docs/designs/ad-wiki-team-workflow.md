@@ -6,7 +6,7 @@
 AD-Wiki 应采用 **Plugin-first、Skill-centered、Bundle-independent** 的架构：
 
 + 团队通过统一 Marketplace 分发一个 `ad-wiki` Plugin；
-+ Plugin 内嵌只读 `ad-wiki-query` 与写入维护 `ad-wiki-maintainer` 两个 Skill、确定性脚本和页面模板；
++ Plugin 内嵌只读 `ad-wiki-query`、写入维护 `ad-wiki-maintainer` 与后置源码编译 `ad-code-wiki` 三个 Skill、确定性脚本和页面模板；
 + 每个业务知识库仍是独立 Git 仓库或独立目录，拥有自己的权限、来源、内容、历史和少量领域配置；
 + Plugin 不保存任何团队知识，只操作用户当前明确打开的知识库；
 + Wiki 内容以 OKF v0.2 Knowledge Bundle 落盘，因此即使脱离 Plugin，仍可被人、普通脚本、其他 Agent、搜索引擎和图谱工具读取。
@@ -21,6 +21,7 @@ AD-Wiki 应采用 **Plugin-first、Skill-centered、Bundle-independent** 的架�
 └── ad-wiki Plugin（共享控制面）
     ├── ad-wiki-query Skill（只读问答）
     ├── ad-wiki-maintainer Skill（知识维护）
+    ├── ad-code-wiki Skill（全库源码实现层）
     ├── 校验、哈希、索引与 Diff Guard
     ├── OKF Profile 与页面模板
     └── 可选 Search MCP / 管理 App
@@ -224,7 +225,7 @@ sources:
     author: human:karpathy
     last_modified: 2026-04-04
 generated:
-  by: ad-wiki/1.3.0
+  by: ad-wiki/1.5.0
   at: 2026-08-15T19:00:00+08:00
 status: draft
 stale_after: 2027-02-15
@@ -306,17 +307,22 @@ ad-wiki/                              # 仓库根即唯一 Plugin 根
 │   │   ├── SKILL.md
 │   │   ├── agents/openai.yaml
 │   │   └── references/query-contract.md
-│   └── ad-wiki-maintainer/
+│   ├── ad-wiki-maintainer/
+│   │   ├── SKILL.md
+│   │   ├── agents/
+│   │   │   └── openai.yaml
+│   │   ├── references/
+│   │   │   ├── okf-profile.md
+│   │   │   ├── workflows.md
+│   │   │   ├── risk-policy.md
+│   │   │   └── migration-policy.md
+│   │   └── assets/
+│   │       └── templates/
+│   └── ad-code-wiki/
 │       ├── SKILL.md
-│       ├── agents/
-│       │   └── openai.yaml
-│       ├── references/
-│       │   ├── okf-profile.md
-│       │   ├── workflows.md
-│       │   ├── risk-policy.md
-│       │   └── migration-policy.md
+│       ├── agents/openai.yaml
+│       ├── references/code-wiki-contract.md
 │       └── assets/
-│           └── templates/
 ├── scripts/
 │   ├── init_bundle.py
 │   ├── register_source.py
@@ -327,6 +333,14 @@ ad-wiki/                              # 仓库根即唯一 Plugin 根
 │   ├── prepare_run.py / apply_run.py
 │   ├── review_run.py
 │   ├── query_registered_raw.py
+│   ├── build_code_index.py / query_code_index.py
+│   ├── inspect_code_impact.py / publish_code_bindings.py
+│   ├── prepare_code_wiki.py / checkpoint_code_wiki.py / finalize_code_wiki.py
+│   ├── ad_wiki/code_index/          # owned Java/SOFA structural index
+│   └── ...
+├── code-index/
+│   ├── pyproject.toml               # isolated pinned tree-sitter dependencies
+│   └── uv.lock
 │   └── migrate_bundle.py
 └── tests/
 ```
@@ -338,7 +352,7 @@ ad-wiki/                              # 仓库根即唯一 Plugin 根
 + 重复且易错的操作交给脚本，不要求模型每次重写；
 + 模板作为 Skill Assets 复用；
 + Codex 与 Claude Code 只维护各自的薄 Manifest/Marketplace，共享根级 `skills/`、references、templates 和 Runtime；
-+ 仓库根就是 Plugin 根；`skills/` 当前包含 `ad-wiki-query` 和 `ad-wiki-maintainer`，并允许后续增加独立 Skill；
++ 仓库根就是 Plugin 根；`skills/` 当前包含 `ad-wiki-query`、`ad-wiki-maintainer` 和 `ad-code-wiki`，并允许后续增加独立 Skill；
 + 不创建冗余 README、Quick Reference 或重复规范；
 + 当前版本不包含 MCP，避免为仓库本地 Wiki 构建引入远程服务。
 
@@ -349,7 +363,7 @@ ad-wiki/                              # 仓库根即唯一 Plugin 根
 ```json
 {
   "name": "ad-wiki",
-  "version": "1.3.0",
+  "version": "1.5.0",
   "description": "Query and maintain independent team knowledge repositories as continuously compiled OKF bundles.",
   "author": {
     "name": "AD Wiki Team"
@@ -379,7 +393,7 @@ ad-wiki/                              # 仓库根即唯一 Plugin 根
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "ad-wiki",
   "displayName": "AD Wiki",
-  "version": "1.3.0",
+  "version": "1.5.0",
   "description": "Query and maintain independent team knowledge repositories as continuously compiled OKF bundles.",
   "author": {
     "name": "AD Wiki Team"
@@ -388,7 +402,7 @@ ad-wiki/                              # 仓库根即唯一 Plugin 根
 }
 ```
 
-两端 Manifest 的正式 `name` 与 `version` 必须一致。Codex 的 `interface` 和 Claude Code 的顶层 `displayName` 属于薄宿主元数据；只读问答与写入维护流程分别只存在于共同的 `skills/ad-wiki-query/SKILL.md` 和 `skills/ad-wiki-maintainer/SKILL.md`。当前版本不声明 `mcpServers`、`apps`、`hooks`、`agents` 或其他未实现能力。
+两端 Manifest 的正式 `name` 与 `version` 必须一致。Codex 的 `interface` 和 Claude Code 的顶层 `displayName` 属于薄宿主元数据；只读问答、知识维护和后置源码编译流程分别只存在于共同的三个 canonical Skill。当前版本不声明 `mcpServers`、`apps`、`hooks`、`agents` 或其他未实现能力。
 
 ### 3. Codex 团队 Marketplace
 ```json
@@ -451,7 +465,7 @@ claude plugin marketplace add <ad-wiki-distribution-repo-root>
 claude plugin install ad-wiki@ad-wiki-team
 ```
 
-Claude Code 中显式调用名分别为 `/ad-wiki:ad-wiki-query` 与 `/ad-wiki:ad-wiki-maintainer`。安装或升级后使用新线程；Claude Code 也可以按提示执行 `/reload-plugins`。
+Claude Code 中显式调用名分别为 `/ad-wiki:ad-wiki-query`、`/ad-wiki:ad-wiki-maintainer` 与 `/ad-wiki:ad-code-wiki`。安装或升级后使用新线程；Claude Code 也可以按提示执行 `/reload-plugins`。
 
 ## 九、核心 Skill 契约
 ### 1. 触发描述
@@ -466,6 +480,13 @@ description: Answer questions from one initialized AD Wiki with cited, read-only
 ---
 name: ad-wiki-maintainer
 description: Maintain team knowledge repositories as persistent OKF v0.2 bundles. Use when initializing an AD Wiki, ingesting immutable sources, writing durable syntheses back to the wiki, linting knowledge health, reconciling contradictions, refreshing stale concepts, or migrating an AD Wiki profile.
+---
+```
+
+```yaml
+---
+name: ad-code-wiki
+description: Build or resume a full-Wiki source-code enrichment pass after an AD Wiki already exists. Use when one initialized Wiki and one latest clean Git code repository should be compiled into implementation Companions for every code-relevant Concept.
 ---
 ```
 
@@ -485,8 +506,8 @@ Plugin 的自动触发条件放在 `description` 中；初始化仓库同时用 
 9. 校验失败不得宣称成功；高风险变更必须已有明确任务授权，并在 Apply 前检查完整 staged diff。
 10. 不自动 Push、建 PR、删除页面或修改权限，除非用户明确授权。
 
-## 十、六个标准操作
-AD-Wiki 将 Karpathy 的三个操作扩展为适合团队治理的六个入口。
+## 十、七个标准操作
+AD-Wiki 将 Karpathy 的三个操作扩展为适合团队治理的七个入口。
 
 <!-- 这是一张图片，ocr 内容为： -->
 ![AD-Wiki 核心维护流程与统一写入状态机](assets/ad-wiki-workflow.png)
@@ -501,6 +522,7 @@ _图 2：摄入、查询回写、巡检迁移共享同一套计划、直接应�
 | `writeback` | 将高价值查询结果沉淀为 Concept | 是 |
 | `lint` | 检查结构、证据、时效和一致性 | 否，默认只报告 |
 | `migrate` | 升级 AD-Wiki Profile 或目录结构 | 是，高风险 |
+| `code-wiki` | 基于最新 clean Git revision 自动编译全部 Concept 的源码实现层 | 是，后置可选 |
 
 
 ### 1. Init
@@ -612,6 +634,25 @@ Plugin 升级不得静默重写旧知识库。迁移流程必须：
 → 人工 Review
 ```
 
+### 7. Code Wiki
+
+Code Wiki 与首次 Wiki 构建解耦：基础 Wiki 先独立可用，用户随后显式提供一个最新、clean、固定 HEAD 的 Git 代码仓库。
+
+```latex
+枚举全部基础 Concept
+→ 逐页读取文档并定位实现/调用方/测试
+→ enriched 或记录 docs-only/no-code-match/needs-review/failed
+→ checkpoint 全库 coverage
+→ staging 实现 Companion、代码快照摘要和托管链接
+→ 全部终态后 finalize exact write set
+→ 单次 Apply、Lint 与文档/源码 Query 验收
+→ 输出差异反馈和独立 Writeback candidates
+```
+
+Code repo 全程只读且不执行；文档代表对外契约，代码代表当前 revision 的实现。Code Wiki run 只管理实现 Companion 和基础页 implementation link，不静默修复文档语义。
+
+`1.5.0` 增加显式 `--structural-index`：使用 AD Wiki 自有、Java/SOFA-first 的 tree-sitter 结构索引生成稳定 symbol IDs、关系证据、bounded subgraph 和 affected Concept。该模式不依赖 Graphify；未启用时保持 `1.4.0` model-only 行为，启用后缺依赖必须停止，不能静默降级。
+
 ## 十一、统一状态机与事务模型
 所有写操作采用同一个状态机：
 
@@ -636,7 +677,7 @@ DISCOVERED
 {
   "run_id": "run-20260815-001",
   "operation": "ingest",
-  "plugin_version": "1.3.0",
+  "plugin_version": "1.5.0",
   "profile_version": "0.1",
   "inputs": ["raw/sources/karpathy-llm-wiki.md"],
   "source_hashes": {"raw/sources/karpathy-llm-wiki.md": "sha256:..."},
@@ -792,7 +833,7 @@ Raw Source 是不可信数据。来源中出现“忽略规则”“执行命令
 
 ## 十八、团队发布与版本治理
 ### 1. 版本分层
-+ Plugin 使用 SemVer，例如当前中间团队版 `1.3.0`；
++ Plugin 使用 SemVer，例如当前中间团队版 `1.5.0`；
 + AD-Wiki Profile 单独版本化，例如 `profile_version: "0.1"`；
 + OKF 版本写在 Bundle 根 `index.md`，当前为 `0.2`；
 + 三者不能混成一个版本号。
@@ -833,7 +874,8 @@ Raw Source 是不可信数据。来源中出现“忽略规则”“执行命令
 + Codex 与 Claude Code 原生团队 Marketplace；
 + `ad-wiki-maintainer` Skill；
 + `ad-wiki-query` Skill；
-+ Init、Ingest、Query、Writeback、Lint；
++ `ad-code-wiki` Skill；
++ Init、Ingest、Query、Writeback、Lint、Migrate、Code Wiki；
 + 基础校验脚本与受门禁的事务、搜索、迁移命令；
 + Source、Concept、Synthesis、Question 模板；
 + 一个小型样例 Bundle。
@@ -864,8 +906,8 @@ Raw Source 是不可信数据。来源中出现“忽略规则”“执行命令
 ## 二十、验收标准
 ### Plugin 分发
 + 团队成员可以从 Codex 或 Claude Code 的原生 Marketplace 安装同一个 `ad-wiki`；
-+ 新线程能发现并触发 canonical `ad-wiki-query` 与 `ad-wiki-maintainer`；Claude Code 显式入口分别为 `/ad-wiki:ad-wiki-query` 和 `/ad-wiki:ad-wiki-maintainer`；
-+ 两套 Plugin Manifest、Marketplace 和两个 canonical Skill 均通过各自官方校验脚本；
++ 新线程能发现并触发 canonical `ad-wiki-query`、`ad-wiki-maintainer` 与 `ad-code-wiki`；Claude Code 暴露对应三个显式入口；
++ 两套 Plugin Manifest、Marketplace 和三个 canonical Skill 均通过各自官方校验脚本；
 + 两个 Manifest 的正式版本一致，两个 Marketplace 指向同一个 Plugin 根；
 + Plugin 不包含任何具体团队知识或凭据。
 
@@ -893,6 +935,19 @@ Raw Source 是不可信数据。来源中出现“忽略规则”“执行命令
 + 高价值答案可以经独立 Writeback 流程沉淀；
 + 一次性回答不会污染 Bundle。
 
+### Code Wiki
++ 不运行 Code Wiki 时，基础 Wiki 保持独立可用；
++ 用户只提供 Wiki 根和最新 clean Git code root，不逐页选择 Concept；
++ 全部基础 Concept 都有终态和 coverage，未评估页面不会静默遗漏；
++ enriched Companion 包含实现原理、必要 Mermaid、真实核心代码、符号、测试阅读声明、文档—代码关系和 full revision；
++ code repo HEAD/status/bytes 不变，运行中断或未 finalize 不改变 live Bundle；
++ 全部输出一次原子 Apply，失败回滚；
++ Wiki 语义问题形成 feedback 和独立 Writeback candidate，不在 Code Wiki run 中自动纠正文档。
++ `--structural-index` 使用固定 Java/POM/Properties extractor、大小写敏感 ID 和 `EXTRACTED | INFERRED | AMBIGUOUS` evidence；
++ graph/cache/manifest/bindings 是自忽略的可重建本地视图，不进入 Bundle；
++ incremental add/change/delete、path/explain/affected 和 bindings 只决定候选/刷新范围，不直接生成 Wiki 事实；
++ Runtime/依赖/产物不引用 Graphify，且不引入 community、fuzzy merge、Graph UI 或 Query 自动写回。
+
 ### Lint 与治理
 + 能区分 OKF Error、AD-Wiki Error 和质量 Warning；
 + 能发现缺失 `type`、断链、孤儿页、索引遗漏、过期内容和无来源主张；
@@ -903,7 +958,7 @@ Raw Source 是不可信数据。来源中出现“忽略规则”“执行命令
 ## 二十一、最终建议
 团队版 AD-Wiki 不应只是一个很长的 Skill，也不应一开始就建设中心化知识平台。最合理的产品形态是：
 
-> **以团队 Plugin 统一分发查询与维护能力，以独立 Skill 承载只读问答和写入工作流，以确定性脚本保证质量，以独立 OKF Bundle 保存每个团队的知识。**
+> **以团队 Plugin 统一分发查询、维护与源码编译能力，以三个独立 Skill 承载只读问答、知识维护和全库 Code Wiki，以确定性脚本保证质量，以独立 OKF Bundle 保存每个团队的知识。**
 >
 
 这套架构同时保留三种独立性：
@@ -912,7 +967,7 @@ Raw Source 是不可信数据。来源中出现“忽略规则”“执行命令
 2. **协议独立**：Wiki 使用 OKF，脱离 Codex 或 Claude Code Plugin 仍可读、可迁移；
 3. **能力统一**：Workflow、校验器和模板由团队统一升级，避免每个知识库复制 Prompt 后发生漂移。
 
-第一版应优先把 Ingest、Query、Writeback、Lint 和事务门禁做扎实。搜索 MCP、管理 App 和 Attestation Runtime 都是可插拔升级项，不应阻塞最小闭环。
+当前版本应继续把 Ingest、Query、Writeback、Lint、Code Wiki 和事务边界做扎实。搜索 MCP、管理 App 和 Attestation Runtime 都是可插拔升级项，不应阻塞仓库本地闭环。
 
 ## 参考资料
 + [Karpathy：LLM Wiki 原始 idea file](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)

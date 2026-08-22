@@ -20,6 +20,15 @@ from .core import (
     write_run_report,
 )
 from .doctor import inspect_plugin
+from .code_wiki import (
+    checkpoint_code_wiki,
+    finalize_code_wiki,
+    prepare_code_wiki,
+    publish_code_wiki_bindings,
+)
+from .code_wiki import inspect_code_repository
+from .code_index.cache import build_or_update_index, cache_root_for, load_current_index
+from .code_index.query import query_graph
 from .runtime import (
     apply_run,
     approve_run,
@@ -197,6 +206,162 @@ def prepare_main(argv: Sequence[str] | None = None) -> int:
         ),
         argv,
     )
+
+
+def prepare_code_wiki_main(argv: Sequence[str] | None = None) -> int:
+    parser = _base_parser("Prepare a resumable full-Wiki Code Wiki compilation.")
+    parser.add_argument("--code-repo", required=True, help="clean local Git code repository root")
+    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--structural-index", action="store_true")
+    return _execute(
+        parser,
+        lambda args: (
+            prepare_code_wiki(
+                args.repo,
+                code_repo=args.code_repo,
+                run_id=args.run_id,
+                structural_index=args.structural_index,
+            ),
+            0,
+        ),
+        argv,
+    )
+
+
+def checkpoint_code_wiki_main(argv: Sequence[str] | None = None) -> int:
+    parser = _base_parser("Checkpoint one Concept in a full-Wiki Code Wiki compilation.")
+    parser.add_argument("--code-repo", required=True, help="clean local Git code repository root")
+    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--concept", required=True, dest="concept_id")
+    parser.add_argument(
+        "--status",
+        required=True,
+        choices=["enriched", "docs-only", "no-code-match", "needs-review", "failed"],
+    )
+    parser.add_argument("--result-json", required=True, help="JSON object with reason and evidence")
+    parser.add_argument("--retry", action="store_true")
+
+    def runner(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
+        value = json.loads(args.result_json)
+        if not isinstance(value, dict):
+            raise ADWikiError("--result-json must be a JSON object")
+        return (
+            checkpoint_code_wiki(
+                args.repo,
+                code_repo=args.code_repo,
+                run_id=args.run_id,
+                concept_id=args.concept_id,
+                status=args.status,
+                result=value,
+                retry=args.retry,
+            ),
+            0,
+        )
+
+    return _execute(parser, runner, argv)
+
+
+def finalize_code_wiki_main(argv: Sequence[str] | None = None) -> int:
+    parser = _base_parser("Finalize a fully evaluated Code Wiki run for atomic Apply.")
+    parser.add_argument("--code-repo", required=True, help="clean local Git code repository root")
+    parser.add_argument("--run-id", required=True)
+    return _execute(
+        parser,
+        lambda args: (
+            finalize_code_wiki(args.repo, code_repo=args.code_repo, run_id=args.run_id),
+            0,
+        ),
+        argv,
+    )
+
+
+def publish_code_bindings_main(argv: Sequence[str] | None = None) -> int:
+    parser = _base_parser("Publish structural Concept bindings after a validated Code Wiki Apply.")
+    parser.add_argument("--run-id", required=True)
+    return _execute(
+        parser,
+        lambda args: (publish_code_wiki_bindings(args.repo, run_id=args.run_id), 0),
+        argv,
+    )
+
+
+def build_code_index_main(argv: Sequence[str] | None = None) -> int:
+    parser = _base_parser("Build or incrementally update a deterministic structural code index.")
+    parser.add_argument("--code-repo", required=True)
+    parser.add_argument("--workers", type=int, default=4)
+
+    def runner(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
+        code_source = inspect_code_repository(args.code_repo)
+        cache_root = cache_root_for(args.repo, code_source)
+        payload = build_or_update_index(
+            args.code_repo,
+            cache_root=cache_root,
+            revision=code_source["revision"],
+            workers=args.workers,
+        )
+        return {
+            **payload,
+            "cache_root": cache_root.relative_to(Path(args.repo).expanduser().resolve()).as_posix(),
+            "code_source": code_source,
+        }, 0
+
+    return _execute(parser, runner, argv)
+
+
+def query_code_index_main(argv: Sequence[str] | None = None) -> int:
+    parser = _base_parser("Query the successful deterministic structural code index.")
+    parser.add_argument("--code-repo", required=True)
+    parser.add_argument("--request-json", required=True)
+
+    def runner(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
+        request = json.loads(args.request_json)
+        if not isinstance(request, dict):
+            raise ADWikiError("--request-json must be a JSON object")
+        code_source = inspect_code_repository(args.code_repo)
+        graph, manifest = load_current_index(cache_root_for(args.repo, code_source))
+        if graph.get("revision") != code_source["revision"]:
+            raise ADWikiError("structural index revision does not match code repository HEAD")
+        return {**query_graph(graph, request), "graph_sha256": manifest["graph_sha256"]}, 0
+
+    return _execute(parser, runner, argv)
+
+
+def inspect_code_impact_main(argv: Sequence[str] | None = None) -> int:
+    parser = _base_parser("Find structurally affected nodes for changed code paths.")
+    parser.add_argument("--code-repo", required=True)
+    parser.add_argument("--path", action="append", required=True, dest="paths")
+    parser.add_argument("--max-depth", type=int, default=3)
+
+    def runner(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
+        code_source = inspect_code_repository(args.code_repo)
+        graph, manifest = load_current_index(cache_root_for(args.repo, code_source))
+        changed = {Path(item).as_posix() for item in args.paths}
+        file_nodes = [
+            item["id"]
+            for item in graph["nodes"]
+            if item.get("kind") == "file" and item.get("source_file") in changed
+        ]
+        affected_ids: set[str] = set(file_nodes)
+        diagnostics: list[str] = []
+        for node_id in file_nodes:
+            result = query_graph(
+                graph,
+                {"mode": "affected", "source_id": node_id, "max_depth": args.max_depth},
+            )
+            affected_ids.update(item["id"] for item in result["nodes"])
+            diagnostics.extend(result["diagnostics"])
+        missing = sorted(changed - {item.get("source_file") for item in graph["nodes"]})
+        if missing:
+            diagnostics.append("changed paths absent from graph: " + ", ".join(missing))
+        return {
+            "revision": graph["revision"],
+            "graph_sha256": manifest["graph_sha256"],
+            "changed_paths": sorted(changed),
+            "affected_node_ids": sorted(affected_ids),
+            "diagnostics": diagnostics,
+        }, 0
+
+    return _execute(parser, runner, argv)
 
 
 def approve_main(argv: Sequence[str] | None = None) -> int:

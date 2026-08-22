@@ -94,6 +94,10 @@ python3 <plugin>/scripts/validate_bundle.py --repo <repo> --json
 
 Default to report-only. Translate findings into ordinary language for the user. Never auto-resolve contradictions, deprecate Concepts, add human verification, or delete content.
 
+After structural validation, run `inspect_wiki_health.py`. Without a semantic Assessment it intentionally returns `incomplete` while preserving useful deterministic metrics and an `assessment_identity` containing the current Wiki revision/content digest and optional code revision. A full assessment copies that identity into the packaged Assessment v1 asset. The Agent owns semantic inventories and representative-question classification; Runtime owns schema, limits, deterministic calculation, evidence and honest `unavailable` results. Never turn filenames/headings into invented key-system or material-claim denominators.
+
+For a complete initial/domain compilation, maintain ordinary key-system/ToC and Glossary Concepts from the packaged templates. These pages are source-backed navigation artifacts, not Primary Sources or new OKF types. Code/graph/Git signals may guide investigation and depth, but they never authorize omitting an existing Concept.
+
 ## Migrate
 
 ```bash

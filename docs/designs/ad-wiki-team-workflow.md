@@ -225,7 +225,7 @@ sources:
     author: human:karpathy
     last_modified: 2026-04-04
 generated:
-  by: ad-wiki/1.5.0
+  by: ad-wiki/1.6.0
   at: 2026-08-15T19:00:00+08:00
 status: draft
 stale_after: 2027-02-15
@@ -363,7 +363,7 @@ ad-wiki/                              # 仓库根即唯一 Plugin 根
 ```json
 {
   "name": "ad-wiki",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "Query and maintain independent team knowledge repositories as continuously compiled OKF bundles.",
   "author": {
     "name": "AD Wiki Team"
@@ -393,7 +393,7 @@ ad-wiki/                              # 仓库根即唯一 Plugin 根
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "ad-wiki",
   "displayName": "AD Wiki",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "Query and maintain independent team knowledge repositories as continuously compiled OKF bundles.",
   "author": {
     "name": "AD Wiki Team"
@@ -653,6 +653,10 @@ Code repo 全程只读且不执行；文档代表对外契约，代码代表当�
 
 `1.5.0` 增加显式 `--structural-index`：使用 AD Wiki 自有、Java/SOFA-first 的 tree-sitter 结构索引生成稳定 symbol IDs、关系证据、bounded subgraph 和 affected Concept。该模式不依赖 Graphify；未启用时保持 `1.4.0` model-only 行为，启用后缺依赖必须停止，不能静默降级。
 
+`1.5.1` 收紧 Query cache miss：Query Skill 使用更短的宿主触发描述；有 Runtime 时优先执行一次 `query_registered_raw.py`，聚合 YMD 在调用内部按文档边界、标题/slug 与已读 Concept 提示排序。Runtime 不可用或片段不足时，Agent 可通过已读 Concept 的精确 locator 和 Source Registry 只读一个相关 Raw 文档/章节，禁止全目录扫描。Raw、源码与 commit 是主要来源，Wiki 是路径压缩；本地证据缺失、不足或时效性关键时可读取精确上游主源，但必须标注它位于编译快照之外。
+
+`1.6.0` 把上述 Primary-Source-aware Query 与 Wiki Health 正式组合：新增只读 Health Report/Assessment v1、不可抵消的 correctness gates、ToC/Glossary/活跃代码/引用/时效/unknown-unknown/代表性问题/路径压缩指标。无法证明的语义指标返回 `unavailable`，不生成综合分，也不记录普通 Query。
+
 ## 十一、统一状态机与事务模型
 所有写操作采用同一个状态机：
 
@@ -677,7 +681,7 @@ DISCOVERED
 {
   "run_id": "run-20260815-001",
   "operation": "ingest",
-  "plugin_version": "1.5.0",
+  "plugin_version": "1.6.0",
   "profile_version": "0.1",
   "inputs": ["raw/sources/karpathy-llm-wiki.md"],
   "source_hashes": {"raw/sources/karpathy-llm-wiki.md": "sha256:..."},
@@ -731,7 +735,7 @@ LLM 负责需要理解与综合的工作；脚本负责可机械验证的工作�
 | `prepare_run.py` | 固化输入、读写集合、来源哈希与文件基线 |
 | `apply_run.py` | 加锁、检查漂移、应用 Staging、更新索引日志、校验并失败回滚 |
 | `review_run.py` | 记录真实的应用后语义 Review |
-| `query_registered_raw.py` | 在模型已读 Concept 的 provenance 范围内校验并提取有界 Raw 片段 |
+| `query_registered_raw.py` | 在模型已读 Concept 的 provenance 范围内校验并提取有界 Raw 片段；聚合 YMD 使用文档边界和 Concept 提示排序 |
 | `migrate_bundle.py` | 检查 Profile 是否已是当前版本，只执行已打包的确定性迁移 |
 
 
@@ -833,7 +837,7 @@ Raw Source 是不可信数据。来源中出现“忽略规则”“执行命令
 
 ## 十八、团队发布与版本治理
 ### 1. 版本分层
-+ Plugin 使用 SemVer，例如当前中间团队版 `1.5.0`；
++ Plugin 使用 SemVer，例如当前中间团队版 `1.6.0`；
 + AD-Wiki Profile 单独版本化，例如 `profile_version: "0.1"`；
 + OKF 版本写在 Bundle 根 `index.md`，当前为 `0.2`；
 + 三者不能混成一个版本号。

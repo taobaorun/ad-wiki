@@ -5,6 +5,7 @@ import json
 import os
 import re
 import tempfile
+from bisect import bisect_right
 from collections import Counter
 from contextlib import contextmanager
 from pathlib import Path
@@ -728,17 +729,24 @@ def _read_bundle_concept(
 def _selected_concept_sources(
     bundle: Path,
     concept_ids: Iterable[str],
-) -> tuple[list[str], list[str]]:
+) -> tuple[list[str], list[str], list[str]]:
     normalized_ids = _normalized_concept_ids(concept_ids)
     resources: list[str] = []
+    hint_values: list[str] = []
     for concept_id in normalized_ids:
-        _, _, lines, _ = _read_bundle_concept(bundle, concept_id, purpose="Raw fallback")
+        _, _, lines, body = _read_bundle_concept(bundle, concept_id, purpose="Raw fallback")
         fields, _, _ = _top_level(lines)
+        hint_values.extend(
+            str(fields[key])
+            for key in ("title", "description", "tags")
+            if fields.get(key)
+        )
+        hint_values.extend(re.findall(r"`([^`\n]{2,80})`", body)[:32])
         for entry in _source_entries(lines, fields.get("sources")):
             resource = entry.get("resource")
             if resource and resource not in resources:
                 resources.append(str(resource))
-    return normalized_ids, resources
+    return normalized_ids, resources, _query_terms(" ".join(hint_values))[:128]
 
 
 def _registered_records_for_resources(
@@ -777,19 +785,49 @@ def _read_verified_registered_source(root: Path, raw_root: Path, record: dict[st
         raise ADWikiError(f"registered Raw source is not UTF-8 text: {record['path']}") from exc
 
 
-def _raw_excerpt_candidates(text: str, terms: list[str]) -> list[dict[str, Any]]:
+def _raw_document_contexts(lines: list[str]) -> tuple[list[int], list[dict[str, Any]]]:
+    documents: list[dict[str, Any]] = []
+    for separator, line in enumerate(lines):
+        if line.strip() != "---":
+            continue
+        heading = separator + 1
+        while heading < len(lines) and not lines[heading].strip():
+            heading += 1
+        if heading >= len(lines) or not re.match(r"^##\s+\S", lines[heading]):
+            continue
+        metadata = lines[heading + 1 : min(len(lines), heading + 12)]
+        if not any(re.match(r"^-\s+(?:doc_id|slug|url|title):\s*", item) for item in metadata):
+            continue
+        documents.append(
+            {
+                "end": len(lines),
+                "search_counts": Counter(_search_tokens(" ".join([lines[heading], *metadata]))),
+                "start": heading,
+            }
+        )
+    for index in range(len(documents) - 1):
+        documents[index]["end"] = documents[index + 1]["start"] - 1
+    return [int(document["start"]) for document in documents], documents
+
+
+def _raw_excerpt_candidates(
+    text: str,
+    terms: list[str],
+    concept_terms: list[str] | None = None,
+) -> list[dict[str, Any]]:
     lines = text.splitlines()
     headings = [index for index, line in enumerate(lines) if line.lstrip().startswith("#")]
+    document_starts, documents = _raw_document_contexts(lines)
+    hint_terms = [term for term in (concept_terms or []) if term not in terms]
     ranked: list[dict[str, Any]] = []
     for index, line in enumerate(lines):
         counts = Counter(_search_tokens(line))
         matched = sorted(term for term in terms if counts[term] > 0)
         if len(matched) < _minimum_term_matches(len(terms)):
             continue
-        previous_headings = [heading for heading in headings if heading <= index]
-        next_headings = [heading for heading in headings if heading > index]
-        section_start = previous_headings[-1] if previous_headings else max(0, index - 2)
-        section_end = next_headings[0] if next_headings else min(len(lines), index + 8)
+        heading_position = bisect_right(headings, index)
+        section_start = headings[heading_position - 1] if heading_position else max(0, index - 2)
+        section_end = headings[heading_position] if heading_position < len(headings) else min(len(lines), index + 8)
         if section_end - section_start > 80:
             start = max(0, index - 3)
             end = min(len(lines), index + 9)
@@ -799,12 +837,28 @@ def _raw_excerpt_candidates(text: str, terms: list[str]) -> list[dict[str, Any]]
         content = "\n".join(lines[start:end]).strip()
         if not content:
             continue
+        document_query_matches = 0
+        document_hint_matches = 0
+        document_position = bisect_right(document_starts, index) - 1
+        if document_position >= 0:
+            document = documents[document_position]
+            if index < int(document["end"]):
+                document_counts = document["search_counts"]
+                document_query_matches = sum(document_counts[term] > 0 for term in terms)
+                document_hint_matches = sum(document_counts[term] > 0 for term in hint_terms)
+        line_hint_matches = sum(counts[term] > 0 for term in hint_terms)
         ranked.append(
             {
                 "content": content,
                 "end_line": end,
                 "matched_terms": matched,
-                "score": 10 * len(matched) + sum(counts[term] for term in matched),
+                "score": (
+                    10 * len(matched)
+                    + sum(counts[term] for term in matched)
+                    + 20 * document_query_matches
+                    + 2 * document_hint_matches
+                    + 2 * line_hint_matches
+                ),
                 "start_line": start + 1,
             }
         )
@@ -845,7 +899,7 @@ def query_registered_raw(
     root = _repository_root(repo)
     raw_root, bundle, config = _configured_roots(root)
     _require_supported_profile(config)
-    normalized_ids, resources = _selected_concept_sources(bundle, concept_ids)
+    normalized_ids, resources, concept_terms = _selected_concept_sources(bundle, concept_ids)
     records = _registered_records_for_resources(root, resources)
     selected_records = records[:max_sources]
     remaining_chars = max_chars
@@ -854,7 +908,7 @@ def query_registered_raw(
     sources: list[dict[str, Any]] = []
     for record_index, record in enumerate(selected_records):
         text = _read_verified_registered_source(root, raw_root, record)
-        candidates = _raw_excerpt_candidates(text, terms)
+        candidates = _raw_excerpt_candidates(text, terms, concept_terms)
         excerpts: list[dict[str, Any]] = []
         for candidate_index, candidate in enumerate(candidates):
             if remaining_chars == 0:

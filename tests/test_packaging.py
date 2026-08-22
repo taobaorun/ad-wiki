@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import sys
@@ -23,7 +24,7 @@ class PackagingTests(unittest.TestCase):
     def test_dual_host_plugin_contracts_share_one_release_identity(self) -> None:
         codex = json.loads((PLUGIN_ROOT / ".codex-plugin/plugin.json").read_text())
         claude = json.loads((PLUGIN_ROOT / ".claude-plugin/plugin.json").read_text())
-        self.assertEqual(PLUGIN_VERSION, "1.5.0")
+        self.assertEqual(PLUGIN_VERSION, "1.6.0")
 
         for manifest in (codex, claude):
             self.assertEqual(manifest["name"], "ad-wiki")
@@ -123,6 +124,9 @@ class PackagingTests(unittest.TestCase):
 
     def test_query_skill_owns_read_only_cited_answers(self) -> None:
         skill = (QUERY_SKILL_ROOT / "SKILL.md").read_text()
+        description = skill.split("description: ", 1)[1].splitlines()[0]
+        self.assertLessEqual(len(description), 240)
+        self.assertIn("Always use", description)
         self.assertNotIn("TODO", skill)
         self.assertIn("<plugin-root>/scripts/query_registered_raw.py", skill)
         self.assertIn("references/query-contract.md", skill)
@@ -137,6 +141,12 @@ class PackagingTests(unittest.TestCase):
         self.assertIn("Never emit an absolute local path", skill)
         self.assertIn("reuse the current evidence", skill)
         self.assertIn("--concept <concept-id>", skill)
+        self.assertIn("manual bounded fallback", skill)
+        self.assertIn("inspect only the relevant document or section", skill)
+        self.assertIn("Do not scan the Raw directory", skill)
+        self.assertIn("the Wiki is a compressed navigation", skill)
+        self.assertIn("automatically read the exact upstream primary source", skill)
+        self.assertIn("Do not ask the user to choose Wiki, Raw, code, or MCP evidence mode", skill)
         self.assertNotIn("search_wiki.py", skill)
         self.assertNotIn("build_query_context.py", skill)
         self.assertNotIn("Context Envelope", skill)
@@ -145,13 +155,22 @@ class PackagingTests(unittest.TestCase):
         self.assertNotIn("ad-wiki-maintainer/SKILL.md", skill)
 
         contract = (QUERY_SKILL_ROOT / "references/query-contract.md").read_text()
-        self.assertIn("Query Contract v3", contract)
+        self.assertIn("Query Contract v5", contract)
         self.assertIn("progressive disclosure", contract)
         self.assertIn("No deterministic scorer", contract)
         self.assertIn("roughly one thousand pages", contract)
         self.assertIn("writeback candidate", contract)
         self.assertIn("content_language", contract)
         self.assertIn("query_registered_raw.py", contract)
+        self.assertIn("resolve an exact Concept-declared locator", contract)
+        self.assertIn("must not scan the Raw directory", contract)
+        self.assertIn("Raw files, source code, and commits remain primary evidence", contract)
+        self.assertIn("automatically consult the exact upstream primary source", contract)
+
+        static_contract = STATIC_AGENT_FILES["AGENTS.md"]
+        self.assertIn("prefer the installed AD Wiki Query runtime", static_contract)
+        self.assertIn("never scan the Raw directory", static_contract)
+        self.assertIn("the Wiki is path compression", static_contract)
 
         openai = (QUERY_SKILL_ROOT / "agents/openai.yaml").read_text()
         self.assertIn("$ad-wiki-query", openai)
@@ -188,7 +207,7 @@ class PackagingTests(unittest.TestCase):
         ):
             text = (CODE_WIKI_SKILL_ROOT / relative).read_text()
             self.assertIn("code-wiki", text)
-            self.assertIn("ad-wiki/1.5.0", text)
+            self.assertIn(f"ad-wiki/{PLUGIN_VERSION}", text)
 
         openai = (CODE_WIKI_SKILL_ROOT / "agents/openai.yaml").read_text()
         self.assertIn("$ad-code-wiki", openai)
@@ -230,6 +249,24 @@ class PackagingTests(unittest.TestCase):
                 self.assertIn("coverage: full", text)
                 self.assertIn("coverage: full", localized_text)
 
+        for name, tag in {
+            "key-system-inventory.md": "ad-wiki-key-system-inventory",
+            "glossary.md": "ad-wiki-glossary",
+        }.items():
+            text = (templates / name).read_text()
+            localized = (templates / "zh-CN" / name).read_text()
+            for candidate in (text, localized):
+                self.assertIn("type: Concept", candidate)
+                self.assertIn(tag, candidate)
+                self.assertIn(f"by: ad-wiki/{PLUGIN_VERSION}", candidate)
+                self.assertIn("Primary Sources", candidate)
+
+        assessment = json.loads(
+            (MAINTAINER_SKILL_ROOT / "assets/wiki-health-assessment.json").read_text()
+        )
+        self.assertEqual(assessment["schema_version"], "1")
+        self.assertNotIn("prompt", assessment)
+
     def test_team_usable_runtime_entrypoints_are_packaged(self) -> None:
         scripts = PLUGIN_ROOT / "scripts"
         for name in (
@@ -245,6 +282,7 @@ class PackagingTests(unittest.TestCase):
             "inspect_code_impact.py",
             "publish_code_bindings.py",
             "query_registered_raw.py",
+            "inspect_wiki_health.py",
             "doctor_plugin.py",
             "migrate_bundle.py",
         ):
@@ -261,6 +299,9 @@ class PackagingTests(unittest.TestCase):
             self.assertIn("rg", text)
             self.assertNotIn("build_query_context.py", text)
             self.assertNotIn("search_wiki.py", text)
+            self.assertIn("inspect_wiki_health.py", text)
+            self.assertIn("Glossary", text)
+            self.assertIn("key-system", text)
 
     def test_plugin_doctor_reports_package_readiness_without_claiming_installation(self) -> None:
         healthy = inspect_plugin(PLUGIN_ROOT, repo=PLUGIN_ROOT / "examples/minimal-wiki")
@@ -295,6 +336,20 @@ class PackagingTests(unittest.TestCase):
             self.assertEqual((example / relative).read_text(), expected)
         self.assertTrue((example / "wiki/index.md").is_file())
         self.assertTrue((example / ".ad-wiki/source-registry.json").is_file())
+        registry = json.loads((example / ".ad-wiki/source-registry.json").read_text())
+        record = registry["sources"][0]
+        self.assertEqual(
+            record["canonical_locator"],
+            "https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f",
+        )
+        self.assertEqual(record["source_id"], "SRC-63AE6A1C7CB2")
+        self.assertEqual(
+            hashlib.sha256((example / record["path"]).read_bytes()).hexdigest(),
+            record["sha256"],
+        )
+        summary = (example / "wiki/sources/llm-wiki.md").read_text()
+        self.assertIn("coverage: partial", summary)
+        self.assertIn("must not be treated as full coverage", summary)
 
 
 if __name__ == "__main__":

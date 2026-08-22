@@ -10,5 +10,6 @@ For factual, conceptual, explanatory, comparative, troubleshooting, or procedura
 4. Read the full relevant Concept pages before answering. Search matches and index descriptions are navigation evidence, not factual proof.
 5. Answer in `content_language` and cite repository-relative Concept paths plus relevant source IDs.
 6. If compiled evidence is missing or insufficient, say that the Wiki does not currently answer the question. Do not substitute model memory for missing Wiki evidence.
-7. Do not inspect Raw for an ordinary Query. An Agent without a governed Raw fallback reports the compiled knowledge gap.
-8. Keep queries read-only. Modify the repository only when the user explicitly requests knowledge maintenance.
+7. For one narrow missing detail linked by a Concept already read, prefer the installed AD Wiki Query runtime's governed Raw fallback. If it is unavailable or insufficient, resolve only that Concept's exact registered source and inspect one relevant document or section; never scan the Raw directory or unrelated sources.
+8. Raw, source code, and commits are primary evidence; the Wiki is path compression. If local evidence is absent, insufficient, or freshness-sensitive, automatically use an exact Concept-declared upstream source when accessible and label it as outside the compiled snapshot. Never ask the user to choose Wiki, Raw, code, or MCP evidence mode.
+9. Keep queries read-only. Modify the repository only when the user explicitly requests knowledge maintenance.

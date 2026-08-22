@@ -81,6 +81,8 @@ Create exactly one `wiki/sources/code-<repo-slug>-<shortsha>.md` per run:
 
 Do not claim coverage of the full repository.
 
+Wiki health may calculate active-code coverage and high-centrality unbound risk signals from the matching structural graph, validated bindings and clean Git history. Those signals prioritize investigation and expose gaps; they never redefine or shrink the base Concept inventory.
+
 ## Feedback boundary
 
 Allowed feedback kinds:

@@ -73,6 +73,10 @@ Run `<plugin-root>/scripts/validate_bundle.py --repo <repo> --json`. Treat `OKF-
 
 Also inspect semantic compilation quality: partial source coverage, catch-all pages that defer reusable answers to Raw, long multi-question sources without atomic Concepts, unresolved Markdown targets, and important sources not integrated into answer-bearing Concepts. Do not invent a deterministic failure from a keyword match alone.
 
+Then run `<plugin-root>/scripts/inspect_wiki_health.py --repo <repo> --json`. The report is a metric vector, never one overall score. `incomplete` means semantic/code/evaluation evidence was not supplied; do not manufacture a denominator merely to remove `unavailable`. For an explicitly requested full health assessment, copy `assessment_identity.wiki_revision`, `assessment_identity.wiki_digest`, and optional `code_revision` from the initial report into `assets/wiki-health-assessment.json`, include only curated question IDs and aggregate journey measurements, place the temporary JSON inside the selected repository, run `--assessment <relative-path>`, and remove the temporary file after its result is consumed. Do not store prompt text, transcripts, ordinary Query history, source bodies, or credentials.
+
+For initial or full-domain compilation, build a reviewable key-system/ToC Concept and canonical Glossary when supported by source evidence, using the localized `assets/templates/key-system-inventory.md` and `assets/templates/glossary.md`. Incremental ingest updates them only when a source changes system boundaries or terminology. A heading alone is not system coverage: record entry points, responsibility/boundary, mechanism, dependency direction, Primary Sources, covered Concepts, and gaps. These are ordinary Concepts and use the shared staged transaction.
+
 ### Migrate
 
 Run `<plugin-root>/scripts/migrate_bundle.py` to inspect the requested target. If it reports `current`, make no changes. If it reports no supported path, stop; do not improvise a migration. For a packaged deterministic migration explicitly requested by the user, read the migration policy, prepare the complete transaction, inspect its diff, apply it, and validate the entire Bundle. Plugin upgrades never silently migrate repositories.
@@ -84,6 +88,7 @@ Run `<plugin-root>/scripts/migrate_bundle.py` to inspect the requested target. I
 - `validate_bundle.py`: validate OKF structure and the AD-Wiki profile.
 - `build_index.py`: regenerate deterministic directory indexes.
 - `raw_diff_guard.py`: detect changed, missing, or escaping Raw files.
+- `inspect_wiki_health.py`: emit a read-only, evidence-linked Wiki health metric vector.
 - `prepare_run.py`: capture the plan, source hashes, and repository baseline.
 - `apply_run.py`: lock, drift-check, apply, index, log, validate, and roll back.
 - `review_run.py`: record a real post-apply semantic review.

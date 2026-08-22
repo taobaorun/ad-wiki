@@ -1,6 +1,6 @@
 ---
 name: ad-wiki-query
-description: Query compiled knowledge in the current or explicitly selected AD Wiki. Always use when a repository contains ad-wiki.yaml and the user asks a factual, conceptual, explanatory, comparative, troubleshooting, or procedural question related to its domain, even when the user does not mention the Wiki or this Skill.
+description: Query an AD Wiki for repository-domain questions. Always use when a repository contains ad-wiki.yaml and the user asks for facts, explanations, comparisons, troubleshooting, or procedures, even without mentioning the Wiki.
 ---
 
 # AD Wiki Query
@@ -34,7 +34,7 @@ For a follow-up that only asks to shorten, reformat, clarify, or explain the sam
 ## Choose one evidence path
 
 1. **Compiled hit:** the Concepts sufficiently answer the question. Answer from them and do not inspect Raw.
-2. **Bounded Raw fallback:** a relevant Concept identifies source provenance but omits one narrow fact or procedure. When command execution and the packaged runtime are available, run at most once:
+2. **Bounded Raw fallback:** a relevant Concept identifies source provenance but omits one narrow fact or procedure. Prefer the packaged runtime when command execution is available, and run it at most once:
 
    ```bash
    python3 <plugin-root>/scripts/query_registered_raw.py \
@@ -43,10 +43,12 @@ For a follow-up that only asks to shorten, reformat, clarify, or explain the sam
      --max-sources 2 --max-chars 6000 --json
    ```
 
-   Pass only Concept IDs actually read for the current question. Do not replace `--concept` with a Raw directory scan or direct Raw grep. When command execution is unavailable, skip fallback and report the knowledge gap.
+   Pass only Concept IDs actually read for the current question. Do not replace `--concept` with a Raw directory scan.
+
+   When the runtime is unavailable or its excerpts are insufficient but repository file reading/search is available, a manual bounded fallback may read `.ad-wiki/source-registry.json`, resolve only an exact `canonical_locator` declared by a Concept already read, select its latest registered record, and inspect only the relevant document or section of that one Raw path. Do not scan the Raw directory, follow unrelated registry entries, or claim runtime hash verification.
 3. **Knowledge gap:** do not inspect broad or unrelated Raw when the Wiki lacks a relevant Concept, provenance is absent, evidence conflicts, freshness is material, or a high-risk conclusion needs formal review. Say the Wiki does not currently answer it.
 
-Raw fallback is a cache miss, not validation of the Wiki. Never call it merely to recheck an adequate Concept.
+Raw fallback is a cache miss, not validation of the Wiki; never call it merely to recheck an adequate Concept. Raw files, source code, and commits are primary evidence, while the Wiki is a compressed navigation and synthesis layer. When local registered evidence is absent or insufficient, or freshness materially matters, automatically read the exact upstream primary source declared by the Concept when host capabilities permit. Do not ask the user to choose Wiki, Raw, code, or MCP evidence mode. Label outside-snapshot evidence and never silently mix it with Wiki claims.
 
 ## Answer from compiled knowledge
 

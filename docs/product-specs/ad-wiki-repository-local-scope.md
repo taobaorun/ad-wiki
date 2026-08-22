@@ -1,6 +1,6 @@
 # Product Contract: AD-Wiki 仓库本地 Wiki 构建能力
 
-Authority: 用户于 2026-08-16 确认仓库本地产品定位；于 2026-08-19 删除本地前置审批；于 2026-08-20 确认千页以内由模型直接导航 Wiki，完整删除 Discovery/Hydration/Context Builder，不保留兼容入口；于 2026-08-21 确认 Wiki 必须通过静态入口服务不具备脚本执行能力的 Agent；于 2026-08-22 确认基础 Wiki 完成后可独立运行全库自动 Code Wiki 编译，并确认 Java/SOFA-first 自建 tree-sitter 结构索引且永不依赖 Graphify
+Authority: 用户于 2026-08-16 确认仓库本地产品定位；于 2026-08-19 删除本地前置审批；于 2026-08-20 确认千页以内由模型直接导航 Wiki，完整删除 Discovery/Hydration/Context Builder，不保留兼容入口；于 2026-08-21 确认 Wiki 必须通过静态入口服务不具备脚本执行能力的 Agent；于 2026-08-22 确认基础 Wiki 完成后可独立运行全库自动 Code Wiki 编译、Java/SOFA-first 自建 tree-sitter 结构索引且永不依赖 Graphify，并要求根据真实 Claude 会话优先优化 AD Wiki 的 Query 触发与 Raw fallback
 
 Product Context: 本文同时记录当前版本的持久产品边界。
 
@@ -53,6 +53,7 @@ Product Context: 本文同时记录当前版本的持久产品边界。
 - R39 — 结构索引必须提供 content cache、manifest-last atomic publish、增量 add/change/delete/prune、全局重解引用和可删除重建恢复；acceptance: no-op cache hit、version miss、corrupt cache、failure injection、checkout/worker determinism tests通过；owner/method: engineering，cache/integration tests；provenance: 用户要求设计一个不依赖 Graphify 的吸收迭代。
 - R40 — Runtime 必须提供 bounded search/explain/path/BFS/DFS/affected 和 Concept↔symbol bindings；acceptance: code_refs v2 与 graph revision/ID/relation/location一致，Apply success 后才发布 bindings，changed symbol 能选择受影响 Concept，无法证明时回退全评估；owner/method: engineering，query/impact/Code Wiki journey；provenance: 用户认可吸收 Graphify 可借鉴的导航与影响能力。
 - R41 — Structural artifacts 只是本地可重建导航视图，不改变 Wiki 真源和治理；acceptance: cache 自忽略、不进 Bundle，不生成社区/God Node Wiki、不 fuzzy merge、不写 Query log、不自动反馈/纠正、不执行 code repo；owner/method: engineering，byte/status/security negative tests；provenance: 已确认 Concept-first、文档优先和受控 Writeback 边界。
+- R42 — `1.5.1` 必须让 Query Skill 的触发描述在 Claude Skill listing 中保持短而可判别，并把窄知识缺口约束为 provenance-bound fallback；acceptance: 有 Runtime 时优先执行一次有界调用，聚合 YMD 使用文档边界与已读 Concept 提示；Runtime 不可用或片段不足时可从精确登记来源只读一个相关文档/章节，但不得扫描 Raw 目录或无关来源；owner/method: engineering，packaging/runtime/真实 SOFA 回放；provenance: Claude Code session `a29c2f94-133c-445a-8c1d-f82e67b981bd` 及用户补充的 DeepWiki Primary Sources/Path Compression 实践。
 
 ## In scope
 
@@ -88,10 +89,10 @@ Product Context: 本文同时记录当前版本的持久产品边界。
 - 每个知识库独立保存内容、少量领域配置和最小静态 Query 契约，不保存完整 Plugin Prompt、模型检索结果或运行时 host memory。
 - 新仓库不生成 `review`、`search.provider` 或 `mcp_threshold_pages` 配置；旧 mapping 可被忽略读取，但不会影响行为。
 - Query、Maintainer 与 Code Wiki 不建立 Skill-to-Skill 运行依赖；三个 Skill 只共享确定性 Runtime 和 Bundle 约定。
-- 普通 Query 信任编译后的 Bundle；仅窄范围 cache miss 使用受控 Raw fallback。
+- 普通 Query 信任编译后的 Bundle；仅窄范围 cache miss 使用 provenance-bound Raw fallback。Raw、源码与 commit 是主要来源，Wiki 是路径压缩与综合层，而不是主源替代品。
 - compiled Query 的最低能力基线是读取项目说明和 Markdown 文件；Shell、脚本、Plugin 与 Raw fallback 都是可选增强。
 - 当前 Profile 保持 `0.1`，本次 Plugin API 删除不触发知识仓库迁移。
-- Code Wiki 生成物仍是普通 OKF Concept；运行状态和可重建 structural cache 位于 `.ad-wiki/`，因此 Plugin `1.5.0` 不改变 OKF/Profile。
+- Code Wiki 生成物仍是普通 OKF Concept；运行状态、可重建 structural cache 和只读 health evidence 位于 `.ad-wiki/`，因此 Plugin `1.6.0` 不改变 OKF/Profile。
 - Structural mode 显式 opt-in；无 flag 时保持 model-only，缺 AST 环境不得静默降级后继续同一 run。
 
 ## Delegated engineering defaults and boundaries

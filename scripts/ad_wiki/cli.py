@@ -20,6 +20,7 @@ from .core import (
     write_run_report,
 )
 from .doctor import inspect_plugin
+from .health import inspect_wiki_health
 from .code_wiki import (
     checkpoint_code_wiki,
     finalize_code_wiki,
@@ -423,6 +424,31 @@ def raw_fallback_main(argv: Sequence[str] | None = None) -> int:
         ),
         argv,
     )
+
+
+def health_main(argv: Sequence[str] | None = None) -> int:
+    parser = _base_parser("Inspect AD-Wiki health without mutating the Wiki or its sources.")
+    parser.add_argument("--assessment", help="optional repo-contained Wiki Health Assessment v1 JSON")
+    parser.add_argument("--code-repo", help="optional latest clean Git code repository")
+    parser.add_argument("--today", help="override current date as YYYY-MM-DD for deterministic checks")
+    parser.add_argument(
+        "--require-healthy",
+        action="store_true",
+        help="exit 1 when the valid report is unhealthy or incomplete",
+    )
+
+    def runner(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
+        current = date.fromisoformat(args.today) if args.today else None
+        payload = inspect_wiki_health(
+            args.repo,
+            assessment_path=args.assessment,
+            code_repo=args.code_repo,
+            today=current,
+        )
+        exit_code = 1 if args.require_healthy and payload["overall_status"] != "healthy" else 0
+        return payload, exit_code
+
+    return _execute(parser, runner, argv)
 
 
 def migrate_main(argv: Sequence[str] | None = None) -> int:

@@ -497,6 +497,76 @@ class SearchAndPolicyTests(RuntimeTestCase):
         self.assertEqual(unrelated["retrieval"]["linked_source_count"], 1)
         self.assertEqual(before, after)
 
+    def test_raw_fallback_uses_document_boundaries_and_concept_hints_for_aggregated_ymd(self) -> None:
+        source = self.repo / "raw/inbox/sofaboot.ymd"
+        source.write_text(
+            """---
+source_type: yuque-book-export
+title: SOFABoot
+---
+
+# SOFABoot
+
+---
+
+## 启动速度一
+
+- doc_id: 1
+- slug: startup-one
+- title: 启动速度一
+
+用户想自定义一个健康检测逻辑应该如何做。业务扩展应该如何做。
+
+---
+
+## 启动速度二
+
+- doc_id: 2
+- slug: startup-two
+- title: 启动速度二
+
+用户想自定义一个健康检测逻辑应该如何做。业务扩展应该如何做。
+
+---
+
+## 健康检查
+
+- doc_id: 3
+- slug: health-check
+- title: 健康检查
+
+### 用户自定义检查项
+
+用户想自定义一个健康检测逻辑应该如何做。业务扩展应该如何做：实现 `HealthIndicator` 并注册为 Spring Bean。
+"""
+        )
+        register_source(self.repo, source, "urn:test:source-a")
+        concept = self.repo / "wiki/concepts/health-traffic.md"
+        concept.write_text(
+            concept_text("SOFABoot 健康检查与流量开关").replace(
+                "description: Durable compiled knowledge.",
+                "description: readiness、自定义检查和流量回调。\n"
+                "tags: [HealthChecker, HealthIndicator, readiness]",
+            )
+        )
+
+        result = query_registered_raw(
+            self.repo,
+            query="用户想自定义一个健康检测逻辑应该如何做",
+            concept_ids=["concepts/health-traffic"],
+        )
+
+        first_excerpt = result["sources"][0]["excerpts"][0]
+        self.assertIn("HealthIndicator", first_excerpt["content"])
+        self.assertGreater(first_excerpt["start_line"], 25)
+
+        hinted_result = query_registered_raw(
+            self.repo,
+            query="业务扩展应该如何做",
+            concept_ids=["concepts/health-traffic"],
+        )
+        self.assertIn("HealthIndicator", hinted_result["sources"][0]["excerpts"][0]["content"])
+
     def test_raw_fallback_rejects_unregistered_or_changed_linked_sources(self) -> None:
         concept = self.repo / "wiki/concepts/unregistered.md"
         concept.write_text(concept_text().replace("urn:test:source-a", "urn:test:missing"))

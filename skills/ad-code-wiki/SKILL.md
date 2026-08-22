@@ -118,6 +118,7 @@ Finalize freezes the exact staged bytes; Apply owns the only live Wiki mutation,
 2. Ask representative document questions and confirm they resolve to base Concepts.
 3. Ask representative source/principle questions and confirm they resolve to implementation Companions.
 4. Report revision, coverage counts, created/updated Companions, managed links, deduplicated feedback, `complete | partial` quality, exact residual Concept IDs, and resume guidance.
+5. When Wiki health is being assessed, run `inspect_wiki_health.py` against the same explicit clean code repository and a revision-bound Assessment v1. Use graph/Git signals to surface active or high-centrality unbound code as risk signals, never to remove a base Concept from the full inventory.
 5. Treat semantic fixes as separate Writeback work requiring explicit authority and a new staged diff.
 
 Do not commit, push, open a PR, publish a release, or change permissions without explicit user authority.

@@ -18,6 +18,7 @@ from .runtime import (
     review_run,
 )
 from .doctor import inspect_plugin
+from .health import inspect_wiki_health, validate_health_report
 from .code_wiki import (
     checkpoint_code_wiki,
     finalize_code_wiki,
@@ -32,8 +33,10 @@ __all__ = [
     "guard_raw",
     "initialize_repository",
     "inspect_plugin",
+    "inspect_wiki_health",
     "register_source",
     "validate_repository",
+    "validate_health_report",
     "write_run_report",
     "prepare_run",
     "query_registered_raw",

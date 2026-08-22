@@ -1,7 +1,7 @@
 {
   "name": "ad-wiki",
-  "version": "1.5.0",
-  "description": "Query, maintain, and enrich independent team knowledge repositories as continuously compiled OKF bundles.",
+  "version": "1.6.0",
+  "description": "Query, maintain, enrich, and assess independent team knowledge repositories as continuously compiled OKF bundles.",
   "author": {
     "name": "AD Wiki Team"
   },
@@ -9,7 +9,7 @@
   "interface": {
     "displayName": "AD Wiki",
     "shortDescription": "只读查询并持续编译、校验和维护团队 OKF 知识库",
-    "longDescription": "Query compiled knowledge, maintain immutable-source knowledge, and add revision-backed source implementation Companions to independent OKF bundles.",
+    "longDescription": "Query compiled knowledge, maintain immutable-source knowledge, add revision-backed source implementation Companions, and emit evidence-linked Wiki health vectors for independent OKF bundles.",
     "developerName": "AD Wiki Team",
     "category": "Productivity",
     "capabilities": ["Interactive", "Read", "Write"],

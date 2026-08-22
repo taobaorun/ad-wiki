@@ -23,6 +23,7 @@ REQUIRED_SCRIPTS = (
     "query_registered_raw.py",
     "query_code_index.py",
     "inspect_code_impact.py",
+    "inspect_wiki_health.py",
     "publish_code_bindings.py",
     "raw_diff_guard.py",
     "register_source.py",

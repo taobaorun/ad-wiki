@@ -54,7 +54,7 @@ question
   → cited read-only answer
 ```
 
-不存在固定 Top-K、候选分数阈值、Hydration selection 数量或 pre-model 字符预算。查询不得扫描其他仓库，也不得写 Wiki、Raw、运行状态、host memory 或全局配置。
+不存在固定 Top-K、候选分数阈值、Hydration selection 数量或 pre-model 字符预算。查询不得扫描其他仓库，也不得写 Wiki、Raw、运行状态、host memory 或全局配置。`1.6.0` 优先通过 Plugin Runtime 执行 governed Raw fallback：聚合 YMD 在一次有界调用内部使用文档边界和已读 Concept 提示排序。Runtime 不可用或片段不足时，可按已读 Concept 的 locator 精确解析登记记录并只读一个相关文档/章节；禁止全量 Raw 扫描。Raw、源码与 commit 是主要来源，Wiki 是路径压缩；需要精确上游主源时必须披露其位于编译快照之外。
 
 ## Maintainer 数据流
 
@@ -86,5 +86,5 @@ BM25、中文 bigram、长度归一化、向量检索、重排和 Search MCP 均
 
 - 静态：删除的脚本、Runtime exports、Skill 引用和 search 配置不存在。
 - Runtime：Raw fallback、直接 Apply、旧事务、路径隔离、回滚、coverage 与链接校验通过。
-- Packaging：两个 Manifest 同为 `1.5.0`，Plugin doctor 和模板检查通过。
+- Packaging：两个 Manifest 同为 `1.6.0`，Plugin doctor 和模板检查通过。
 - 行为：有 Plugin Agent 与只有项目说明/文件读取能力的无脚本 Agent，都能通过 index + Bundle Markdown 回答代表性问题；Query 字节只读；Maintainer 检查 staged diff，不写运行时 host memory，不把 partial 报告成完成。

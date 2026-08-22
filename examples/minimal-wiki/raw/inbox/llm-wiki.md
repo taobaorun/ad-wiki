@@ -1,3 +1,3 @@
-# LLM Wiki
+# LLM Wiki (partial fixture)
 
-An LLM Wiki incrementally builds and maintains a persistent, interlinked Markdown wiki from immutable source material. Knowledge is compiled once and kept current instead of being rediscovered for every query.
+This packaged fixture is a partial paraphrase of Karpathy's LLM Wiki idea file. It records only the core architecture: immutable Raw sources are the source of truth, the LLM maintains a persistent interlinked Wiki, and repository instructions govern Ingest, Query, and Lint. Consult the canonical Gist for the complete source.

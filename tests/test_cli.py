@@ -219,6 +219,57 @@ Knowledge is compiled once and maintained.[^paper]
         self.assertEqual(malformed["status"], "error")
         self.assertIn("malformed source registry record", malformed["error"])
 
+    def test_wiki_health_cli_reports_incomplete_and_supports_explicit_gate(self) -> None:
+        self.run_cli("init_bundle.py", "--repo", str(self.repo), "--domain", "research")
+        source = self.repo / "raw/inbox/paper.md"
+        source.write_text("Health evidence.\n")
+        self.run_cli(
+            "register_source.py",
+            "--repo",
+            str(self.repo),
+            "--source",
+            str(source),
+            "--canonical-locator",
+            "urn:test:health",
+        )
+        concept = self.repo / "wiki/concepts/health.md"
+        concept.write_text(
+            """---
+type: Concept
+title: Health
+sources:
+  - id: health
+    resource: urn:test:health
+---
+
+# Health
+
+Health evidence is compiled.[^health]
+
+[^health]: Registered source.
+"""
+        )
+        self.run_cli("build_index.py", "--repo", str(self.repo))
+
+        report = self.run_cli(
+            "inspect_wiki_health.py",
+            "--repo",
+            str(self.repo),
+            "--today",
+            "2026-08-22",
+        )
+        self.assertEqual(report["overall_status"], "incomplete")
+        gated = self.run_cli(
+            "inspect_wiki_health.py",
+            "--repo",
+            str(self.repo),
+            "--today",
+            "2026-08-22",
+            "--require-healthy",
+            expected=1,
+        )
+        self.assertEqual(gated["overall_status"], "incomplete")
+
     def test_init_hides_legacy_owner_from_config_and_returns_deprecation_warning(self) -> None:
         initialized = self.run_cli(
             "init_bundle.py",

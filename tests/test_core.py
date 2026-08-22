@@ -51,7 +51,11 @@ class InitializeRepositoryTests(RepositoryTestCase):
         self.assertIn("Read `ad-wiki.yaml`", agent_entry)
         self.assertIn("Shell or script execution is optional", agent_entry)
         self.assertIn("Do not substitute model memory", agent_entry)
-        self.assertIn("Do not inspect Raw for an ordinary Query", agent_entry)
+        self.assertIn("prefer the installed AD Wiki Query runtime", agent_entry)
+        self.assertIn("inspect one relevant document or section", agent_entry)
+        self.assertIn("never scan the Raw directory", agent_entry)
+        self.assertIn("the Wiki is path compression", agent_entry)
+        self.assertIn("Never ask the user to choose Wiki, Raw, code, or MCP evidence mode", agent_entry)
         self.assertEqual((self.repo / "CLAUDE.md").read_text(), "# AD Wiki\n\n@AGENTS.md\n")
 
         config = json.loads((self.repo / "ad-wiki.yaml").read_text())

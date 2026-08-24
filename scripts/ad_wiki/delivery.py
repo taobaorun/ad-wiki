@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import hashlib
+import ctypes
+import errno
 import json
 import os
 import re
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
+import zipfile
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -31,6 +35,7 @@ from .core import (
 
 
 DELIVERY_TEMPLATE_VERSION = "1"
+OUTPUT_FORMATS = {"both", "directory", "zip"}
 MAX_INCLUDED_FILES = 100_000
 MAX_PATH_BYTES = 1_024
 EXCLUDED_PATHS = [".ad-wiki/runs", ".ad-wiki/cache", ".ad-wiki/lock"]
@@ -377,6 +382,198 @@ def _tree_is_identical(left: Path, right: Path) -> bool:
     return inventory(left) == inventory(right)
 
 
+def _candidate_files(candidate: Path) -> list[Path]:
+    files: list[tuple[str, Path]] = []
+    for path in sorted(candidate.rglob("*")):
+        if path.is_dir():
+            continue
+        relative = path.relative_to(candidate).as_posix()
+        if path.is_symlink() or not path.is_file():
+            raise ADWikiError(f"generated artifact contains an unsafe path: {relative}")
+        files.append((relative, path))
+    return [path for _, path in sorted(files, key=lambda item: item[0])]
+
+
+def _write_deterministic_zip(
+    candidate: Path, archive_path: Path, skill_name: str
+) -> None:
+    with zipfile.ZipFile(
+        archive_path,
+        mode="w",
+        compression=zipfile.ZIP_DEFLATED,
+        compresslevel=9,
+        allowZip64=True,
+        strict_timestamps=True,
+    ) as archive:
+        archive.comment = b""
+        for source in _candidate_files(candidate):
+            relative = source.relative_to(candidate).as_posix()
+            archive_name = f"{skill_name}/{relative}"
+            source_stat = source.stat()
+            mode = 0o755 if source_stat.st_mode & stat.S_IXUSR else 0o644
+            info = zipfile.ZipInfo(archive_name, date_time=(1980, 1, 1, 0, 0, 0))
+            info.create_system = 3
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = (stat.S_IFREG | mode) << 16
+            info.extra = b""
+            info.comment = b""
+            info.file_size = source_stat.st_size
+            info._compresslevel = 9
+            with source.open("rb") as reader, archive.open(
+                info,
+                mode="w",
+                force_zip64=info.file_size >= 2**31,
+            ) as writer:
+                for chunk in iter(lambda: reader.read(1024 * 1024), b""):
+                    writer.write(chunk)
+    os.chmod(archive_path, 0o644)
+
+
+def _validate_deterministic_zip(
+    candidate: Path,
+    archive_path: Path,
+    skill_name: str,
+) -> dict[str, Any]:
+    candidate_files = _candidate_files(candidate)
+    expected_names = sorted(
+        f"{skill_name}/{path.relative_to(candidate).as_posix()}"
+        for path in candidate_files
+    )
+    try:
+        with zipfile.ZipFile(archive_path) as archive:
+            infos = archive.infolist()
+            names = [info.filename for info in infos]
+            if names != expected_names or len(names) != len(set(names)):
+                raise ADWikiError(
+                    "generated ZIP entry inventory does not match the Skill candidate"
+                )
+            if archive.comment:
+                raise ADWikiError("generated ZIP archive comment must be empty")
+            for source, info in zip(candidate_files, infos, strict=True):
+                parts = info.filename.split("/")
+                if (
+                    info.filename.startswith("/")
+                    or "\\" in info.filename
+                    or any(not part or part in {".", ".."} for part in parts)
+                    or parts[0] != skill_name
+                    or info.is_dir()
+                ):
+                    raise ADWikiError(
+                        f"generated ZIP contains an unsafe entry: {info.filename}"
+                    )
+                source_stat = source.stat()
+                expected_mode = 0o755 if source_stat.st_mode & stat.S_IXUSR else 0o644
+                archived_mode = info.external_attr >> 16
+                if (
+                    info.date_time != (1980, 1, 1, 0, 0, 0)
+                    or info.create_system != 3
+                    or info.compress_type != zipfile.ZIP_DEFLATED
+                    or info.extra
+                    or info.comment
+                    or stat.S_IFMT(archived_mode) != stat.S_IFREG
+                    or stat.S_IMODE(archived_mode) != expected_mode
+                    or info.file_size != source_stat.st_size
+                ):
+                    raise ADWikiError(
+                        f"generated ZIP entry metadata is invalid: {info.filename}"
+                    )
+                digest = hashlib.sha256()
+                with archive.open(info) as reader:
+                    for chunk in iter(lambda: reader.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                if digest.hexdigest() != _sha256_file(source):
+                    raise ADWikiError(
+                        f"generated ZIP entry bytes differ from candidate: {info.filename}"
+                    )
+    except zipfile.BadZipFile as exc:
+        raise ADWikiError("generated ZIP is invalid") from exc
+    return {
+        "sha256": _sha256_file(archive_path),
+        "size": archive_path.stat().st_size,
+    }
+
+
+def _directory_target_status(candidate: Path, target: Path, skill_name: str) -> str:
+    if target.is_symlink():
+        raise ADWikiError("output target must not use a symlink")
+    if not target.exists():
+        return "created"
+    if not target.is_dir() or not _tree_is_identical(candidate, target):
+        raise ADWikiError(
+            f"refusing to overwrite non-identical output target: {skill_name}"
+        )
+    return "unchanged"
+
+
+def _archive_target_status(
+    target: Path,
+    skill_name: str,
+    identity: dict[str, Any],
+) -> str:
+    if target.is_symlink():
+        raise ADWikiError("output archive must not use a symlink")
+    if not target.exists():
+        return "created"
+    if (
+        not target.is_file()
+        or target.stat().st_size != identity["size"]
+        or _sha256_file(target) != identity["sha256"]
+    ):
+        raise ADWikiError(
+            f"refusing to overwrite non-identical output archive: {skill_name}.zip"
+        )
+    return "unchanged"
+
+
+def _rename_no_replace(source: Path, target: Path) -> None:
+    source_bytes = os.fsencode(source)
+    target_bytes = os.fsencode(target)
+    result: int
+    if sys.platform.startswith("linux"):
+        libc = ctypes.CDLL(None, use_errno=True)
+        renameat2 = getattr(libc, "renameat2", None)
+        if renameat2 is None:
+            raise ADWikiError(
+                "atomic no-replace publication is unavailable on this Linux host"
+            )
+        renameat2.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        renameat2.restype = ctypes.c_int
+        result = renameat2(-100, source_bytes, -100, target_bytes, 1)
+    elif sys.platform == "darwin":
+        libc = ctypes.CDLL(None, use_errno=True)
+        renamex_np = getattr(libc, "renamex_np", None)
+        if renamex_np is None:
+            raise ADWikiError(
+                "atomic no-replace publication is unavailable on this macOS host"
+            )
+        renamex_np.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+        renamex_np.restype = ctypes.c_int
+        result = renamex_np(source_bytes, target_bytes, 0x00000004)
+    elif os.name == "nt":
+        try:
+            os.rename(source, target)
+        except FileExistsError as exc:
+            raise ADWikiError(
+                f"output target appeared during publication: {target.name}"
+            ) from exc
+        return
+    else:
+        raise ADWikiError("atomic no-replace publication is unavailable on this host")
+
+    if result == 0:
+        return
+    error_number = ctypes.get_errno()
+    if error_number in {errno.EEXIST, errno.ENOTEMPTY}:
+        raise ADWikiError(f"output target appeared during publication: {target.name}")
+    raise OSError(error_number, os.strerror(error_number), str(target))
+
+
 def _build_candidate(
     root: Path,
     candidate: Path,
@@ -529,7 +726,12 @@ def build_wiki_skill(
     *,
     output_parent: str | Path,
     wiki_name: str | None = None,
+    output_format: str = "directory",
 ) -> dict[str, Any]:
+    if output_format not in OUTPUT_FORMATS:
+        raise ADWikiError(
+            "output format must be one of: " + ", ".join(sorted(OUTPUT_FORMATS))
+        )
     unresolved_root = Path(repo).expanduser()
     if unresolved_root.is_symlink():
         raise ADWikiError("AD Wiki repository root must not use a symlink")
@@ -545,11 +747,15 @@ def build_wiki_skill(
     if unresolved_output.exists() and unresolved_output.is_symlink():
         raise ADWikiError("output parent must not use a symlink")
     output_root = unresolved_output.resolve()
-    target = output_root / skill_name
-    if _path_is_within(target, root):
+    directory_target = output_root / skill_name
+    archive_target = output_root / f"{skill_name}.zip"
+    requested_targets: list[Path] = []
+    if output_format in {"directory", "both"}:
+        requested_targets.append(directory_target)
+    if output_format in {"zip", "both"}:
+        requested_targets.append(archive_target)
+    if any(_path_is_within(target, root) for target in requested_targets):
         raise ADWikiError("output target must be outside the source Wiki repository")
-    if target.is_symlink():
-        raise ADWikiError("output target must not use a symlink")
 
     raw_root, bundle, config = _configured_roots(root)
     _require_supported_profile(config)
@@ -636,6 +842,7 @@ def build_wiki_skill(
     output_root.mkdir(parents=True, exist_ok=True)
     temp_path = Path(tempfile.mkdtemp(prefix=f".{skill_name}.", dir=output_root))
     os.chmod(temp_path, 0o700)
+    temp_archive: Path | None = None
     try:
         result = _build_candidate(
             root,
@@ -653,24 +860,137 @@ def build_wiki_skill(
             git_revision=git_revision,
             forbidden_paths=source_paths,
         )
+        archive_identity: dict[str, Any] | None = None
+        if output_format in {"zip", "both"}:
+            descriptor, temp_archive_name = tempfile.mkstemp(
+                prefix=f".{skill_name}.",
+                suffix=".zip",
+                dir=output_root,
+            )
+            os.close(descriptor)
+            temp_archive = Path(temp_archive_name)
+            _write_deterministic_zip(temp_path, temp_archive, skill_name)
+            archive_identity = _validate_deterministic_zip(
+                temp_path,
+                temp_archive,
+                skill_name,
+            )
         for relative, expected in source_digests.items():
             if _sha256_file(root / relative) != expected:
                 raise ADWikiError(
                     f"source changed before delivery publication: {relative}"
                 )
-        if target.exists():
-            if not target.is_dir() or not _tree_is_identical(temp_path, target):
-                raise ADWikiError(
-                    f"refusing to overwrite non-identical output target: {skill_name}"
+
+        directory_status: str | None = None
+        archive_status: str | None = None
+        if output_format in {"directory", "both"}:
+            directory_status = _directory_target_status(
+                temp_path,
+                directory_target,
+                skill_name,
+            )
+        if output_format in {"zip", "both"}:
+            if temp_archive is None or archive_identity is None:
+                raise ADWikiError("ZIP candidate identity is unavailable")
+            archive_status = _archive_target_status(
+                archive_target,
+                skill_name,
+                archive_identity,
+            )
+
+        archive_published = False
+        published_archive_stat: tuple[int, int] | None = None
+        try:
+            if archive_status == "created":
+                if temp_archive is None:
+                    raise ADWikiError("ZIP candidate is unavailable")
+                archive_stat = temp_archive.stat(follow_symlinks=False)
+                published_archive_stat = (archive_stat.st_dev, archive_stat.st_ino)
+                _rename_no_replace(temp_archive, archive_target)
+                archive_published = True
+                current_archive_stat = archive_target.stat(follow_symlinks=False)
+                if (
+                    current_archive_stat.st_dev,
+                    current_archive_stat.st_ino,
+                ) != published_archive_stat:
+                    raise ADWikiError(
+                        "ZIP publication ownership changed before it could be verified"
+                    )
+            if directory_status == "created":
+                directory_stat = temp_path.stat(follow_symlinks=False)
+                published_directory_stat = (
+                    directory_stat.st_dev,
+                    directory_stat.st_ino,
                 )
-            status_value = "unchanged"
-        else:
-            os.replace(temp_path, target)
-            status_value = "created"
+                _rename_no_replace(temp_path, directory_target)
+                current_directory_stat = directory_target.stat(follow_symlinks=False)
+                if (
+                    current_directory_stat.st_dev,
+                    current_directory_stat.st_ino,
+                ) != published_directory_stat:
+                    raise ADWikiError(
+                        "directory publication ownership changed before it could be verified"
+                    )
+        except Exception as publish_error:
+            if archive_published:
+                try:
+                    current_stat = archive_target.stat(follow_symlinks=False)
+                    current_identity = (current_stat.st_dev, current_stat.st_ino)
+                    if (
+                        published_archive_stat is None
+                        or current_identity != published_archive_stat
+                        or archive_identity is None
+                        or not stat.S_ISREG(current_stat.st_mode)
+                        or current_stat.st_size != archive_identity["size"]
+                        or _sha256_file(archive_target) != archive_identity["sha256"]
+                    ):
+                        raise ADWikiError(
+                            "delivery publication failed and ZIP rollback ownership changed; "
+                            "the replacement archive was preserved"
+                        )
+                    archive_target.unlink()
+                except ADWikiError:
+                    raise
+                except OSError as rollback_error:
+                    raise ADWikiError(
+                        "delivery publication failed and the current-run ZIP rollback also failed: "
+                        f"{rollback_error}"
+                    ) from publish_error
+            raise
+
+        requested_statuses = [
+            status
+            for status in (directory_status, archive_status)
+            if status is not None
+        ]
+        status_value = "created" if "created" in requested_statuses else "unchanged"
+        directory_result = (
+            {"path": str(directory_target), "status": directory_status}
+            if directory_status is not None
+            else None
+        )
+        archive_result = (
+            {
+                "path": str(archive_target),
+                "sha256": archive_identity["sha256"],
+                "size": archive_identity["size"],
+                "status": archive_status,
+            }
+            if archive_status is not None and archive_identity is not None
+            else None
+        )
+        primary_output = (
+            directory_target
+            if output_format in {"directory", "both"}
+            else archive_target
+        )
         return {
             **result,
+            "archive": archive_result,
+            "directory": directory_result,
+            "format": output_format,
             "name_source": name_source,
-            "output": str(target),
+            "output": str(primary_output),
             "skill_name": skill_name,
             "status": status_value,
             "wiki_name": selected_name,
@@ -678,3 +998,5 @@ def build_wiki_skill(
     finally:
         if temp_path.exists():
             shutil.rmtree(temp_path)
+        if temp_archive is not None and temp_archive.exists():
+            temp_archive.unlink()

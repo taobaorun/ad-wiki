@@ -456,6 +456,12 @@ def ship_main(argv: Sequence[str] | None = None) -> int:
     parser = _base_parser("Build one standalone read-only Skill from a validated AD Wiki.")
     parser.add_argument("--output", required=True, help="explicit parent directory for the generated Skill")
     parser.add_argument("--wiki-name", help="explicit Wiki delivery identity; defaults to repository basename")
+    parser.add_argument(
+        "--format",
+        default="directory",
+        dest="output_format",
+        help="delivery format: directory, zip, or both (default: directory)",
+    )
     return _execute(
         parser,
         lambda args: (
@@ -463,6 +469,7 @@ def ship_main(argv: Sequence[str] | None = None) -> int:
                 args.repo,
                 output_parent=args.output,
                 wiki_name=args.wiki_name,
+                output_format=args.output_format,
             ),
             0,
         ),

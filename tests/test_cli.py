@@ -231,8 +231,10 @@ Knowledge is compiled once and maintained.[^paper]
             "LLM Wiki",
         )
         self.assertEqual(created["status"], "created")
+        self.assertEqual(created["format"], "directory")
         self.assertEqual(created["skill_name"], "ad-llm-wiki")
         self.assertEqual(Path(created["output"]), self.repo / "ad-llm-wiki")
+        self.assertIsNone(created["archive"])
         self.assertFalse(created["capabilities"]["writeback"])
         unchanged = self.run_cli(
             "build_wiki_skill.py",
@@ -245,6 +247,35 @@ Knowledge is compiled once and maintained.[^paper]
         )
         self.assertEqual(unchanged["status"], "unchanged")
 
+        zipped = self.run_cli(
+            "build_wiki_skill.py",
+            "--repo",
+            str(source),
+            "--output",
+            str(self.repo / "zip"),
+            "--wiki-name",
+            "LLM Wiki",
+            "--format",
+            "zip",
+        )
+        self.assertEqual(zipped["format"], "zip")
+        self.assertTrue(Path(zipped["archive"]["path"]).is_file())
+        self.assertIsNone(zipped["directory"])
+
+        both = self.run_cli(
+            "build_wiki_skill.py",
+            "--repo",
+            str(source),
+            "--output",
+            str(self.repo / "both"),
+            "--wiki-name",
+            "LLM Wiki",
+            "--format",
+            "both",
+        )
+        self.assertTrue(Path(both["directory"]["path"]).is_dir())
+        self.assertTrue(Path(both["archive"]["path"]).is_file())
+
         failed = self.run_cli(
             "build_wiki_skill.py",
             "--repo",
@@ -256,6 +287,19 @@ Knowledge is compiled once and maintained.[^paper]
             expected=2,
         )
         self.assertEqual(failed["status"], "error")
+
+        invalid_format = self.run_cli(
+            "build_wiki_skill.py",
+            "--repo",
+            str(source),
+            "--output",
+            str(self.repo / "invalid-format"),
+            "--format",
+            "tar",
+            expected=2,
+        )
+        self.assertEqual(invalid_format["status"], "error")
+        self.assertIn("output format", invalid_format["error"])
 
     def test_wiki_health_cli_reports_incomplete_and_supports_explicit_gate(self) -> None:
         self.run_cli("init_bundle.py", "--repo", str(self.repo), "--domain", "research")

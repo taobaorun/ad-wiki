@@ -25,7 +25,7 @@ class PackagingTests(unittest.TestCase):
     def test_dual_host_plugin_contracts_share_one_release_identity(self) -> None:
         codex = json.loads((PLUGIN_ROOT / ".codex-plugin/plugin.json").read_text())
         claude = json.loads((PLUGIN_ROOT / ".claude-plugin/plugin.json").read_text())
-        self.assertEqual(PLUGIN_VERSION, "1.7.0")
+        self.assertEqual(PLUGIN_VERSION, "1.8.0")
 
         for manifest in (codex, claude):
             self.assertEqual(manifest["name"], "ad-wiki")
@@ -304,6 +304,8 @@ class PackagingTests(unittest.TestCase):
         self.assertIn("ad-${wiki-name}", skill)
         self.assertIn("does not deploy", skill)
         self.assertIn("canonical templates", skill)
+        self.assertIn("directory`, `zip`, or `both", skill)
+        self.assertIn("archive SHA-256", skill)
         self.assertNotIn("Writeback", skill)
 
         openai = (SHIP_SKILL_ROOT / "agents/openai.yaml").read_text()

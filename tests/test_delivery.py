@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -88,8 +89,14 @@ class WikiSkillBuildTests(unittest.TestCase):
         second = build_wiki_skill(self.repo, output_parent=self.root / "second")
 
         self.assertEqual(first["status"], "created")
+        self.assertEqual(first["format"], "directory")
         self.assertEqual(first["skill_name"], "ad-sample-wiki")
         self.assertEqual(first["name_source"], "repository-basename")
+        self.assertEqual(
+            first["directory"],
+            {"path": first["output"], "status": "created"},
+        )
+        self.assertIsNone(first["archive"])
         self.assertEqual(first["artifact_digest"], second["artifact_digest"])
         self.assertEqual(first["manifest_sha256"], second["manifest_sha256"])
 
@@ -119,6 +126,289 @@ class WikiSkillBuildTests(unittest.TestCase):
         self.assertEqual(self.tree_digest(self.repo), source_before)
         self.assertIsNone(manifest["source"]["git_revision"])
         self.assertIn("git-revision-unavailable", manifest["warnings"])
+
+    def test_format_validation_happens_before_output_mutation(self) -> None:
+        output = self.root / "output"
+        with self.assertRaisesRegex(ADWikiError, "output format"):
+            build_wiki_skill(
+                self.repo,
+                output_parent=output,
+                output_format="tar",
+            )
+        self.assertFalse(output.exists())
+
+    def test_zip_format_is_deterministic_exact_skill_transport(self) -> None:
+        directory_result = build_wiki_skill(
+            self.repo,
+            output_parent=self.root / "directory",
+        )
+        first = build_wiki_skill(
+            self.repo,
+            output_parent=self.root / "zip-first",
+            output_format="zip",
+        )
+        second = build_wiki_skill(
+            self.repo,
+            output_parent=self.root / "zip-second",
+            output_format="zip",
+        )
+
+        first_archive = Path(first["output"])
+        second_archive = Path(second["output"])
+        self.assertEqual(first["format"], "zip")
+        self.assertIsNone(first["directory"])
+        self.assertEqual(first["archive"]["path"], str(first_archive))
+        self.assertEqual(first["archive"]["status"], "created")
+        self.assertEqual(first["archive"]["size"], first_archive.stat().st_size)
+        self.assertEqual(
+            first["archive"]["sha256"],
+            hashlib.sha256(first_archive.read_bytes()).hexdigest(),
+        )
+        self.assertFalse((first_archive.parent / "ad-sample-wiki").exists())
+        self.assertEqual(first["artifact_digest"], directory_result["artifact_digest"])
+        self.assertEqual(first["manifest_sha256"], directory_result["manifest_sha256"])
+        self.assertEqual(first_archive.read_bytes(), second_archive.read_bytes())
+        self.assertEqual(first["archive"]["sha256"], second["archive"]["sha256"])
+
+        with zipfile.ZipFile(first_archive) as archive:
+            names = archive.namelist()
+            self.assertEqual(names, sorted(names))
+            self.assertTrue(names)
+            self.assertTrue(all(name.startswith("ad-sample-wiki/") for name in names))
+            self.assertTrue(all(".." not in Path(name).parts for name in names))
+            self.assertTrue(
+                all(not name.startswith("/") and "\\" not in name for name in names)
+            )
+            self.assertEqual(archive.comment, b"")
+            self.assertIsNone(archive.testzip())
+            for info in archive.infolist():
+                self.assertEqual(info.date_time, (1980, 1, 1, 0, 0, 0))
+                self.assertEqual(info.create_system, 3)
+                self.assertEqual(info.compress_type, zipfile.ZIP_DEFLATED)
+                self.assertEqual(info.extra, b"")
+                self.assertEqual(info.comment, b"")
+                expected_mode = (
+                    0o755
+                    if info.filename.endswith("scripts/query_registered_raw.py")
+                    else 0o644
+                )
+                self.assertEqual((info.external_attr >> 16) & 0o777, expected_mode)
+
+            zipped_manifest = json.loads(
+                archive.read("ad-sample-wiki/references/artifact-manifest.json")
+            )
+            self.assertEqual(
+                zipped_manifest["artifact_digest"], first["artifact_digest"]
+            )
+
+        extracted = self.root / "extracted"
+        with zipfile.ZipFile(first_archive) as archive:
+            archive.extractall(extracted)
+        self.assertEqual(
+            self.tree_digest(extracted / "ad-sample-wiki"),
+            self.tree_digest(Path(directory_result["output"])),
+        )
+
+        unchanged = build_wiki_skill(
+            self.repo,
+            output_parent=self.root / "zip-first",
+            output_format="zip",
+        )
+        self.assertEqual(unchanged["status"], "unchanged")
+        self.assertEqual(unchanged["archive"]["status"], "unchanged")
+
+    def test_zip_orders_prefix_related_paths_by_posix_entry_name(self) -> None:
+        for relative in ("wiki/a/file.txt", "wiki/a-b.txt", "wiki/A.txt"):
+            path = self.repo / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(relative + "\n")
+        result = build_wiki_skill(
+            self.repo,
+            output_parent=self.root / "output",
+            output_format="zip",
+        )
+        with zipfile.ZipFile(result["archive"]["path"]) as archive:
+            self.assertEqual(archive.namelist(), sorted(archive.namelist()))
+
+    def test_both_format_publishes_and_reuses_exact_pair(self) -> None:
+        created = build_wiki_skill(
+            self.repo,
+            output_parent=self.root / "output",
+            output_format="both",
+        )
+        directory = Path(created["directory"]["path"])
+        archive = Path(created["archive"]["path"])
+        self.assertEqual(created["status"], "created")
+        self.assertEqual(created["output"], str(directory))
+        self.assertTrue(directory.is_dir())
+        self.assertTrue(archive.is_file())
+        self.assertEqual(created["directory"]["status"], "created")
+        self.assertEqual(created["archive"]["status"], "created")
+
+        unchanged = build_wiki_skill(
+            self.repo,
+            output_parent=self.root / "output",
+            output_format="both",
+        )
+        self.assertEqual(unchanged["status"], "unchanged")
+        self.assertEqual(unchanged["directory"]["status"], "unchanged")
+        self.assertEqual(unchanged["archive"]["status"], "unchanged")
+
+    def test_both_preflights_conflicts_before_publishing_either_target(self) -> None:
+        directory_target = self.root / "directory-conflict/ad-sample-wiki"
+        directory_target.mkdir(parents=True)
+        marker = directory_target / "user.txt"
+        marker.write_text("preserve directory\n")
+        with self.assertRaisesRegex(ADWikiError, "non-identical output target"):
+            build_wiki_skill(
+                self.repo,
+                output_parent=directory_target.parent,
+                output_format="both",
+            )
+        self.assertEqual(marker.read_text(), "preserve directory\n")
+        self.assertFalse((directory_target.parent / "ad-sample-wiki.zip").exists())
+
+        archive_parent = self.root / "archive-conflict"
+        archive_parent.mkdir()
+        archive_target = archive_parent / "ad-sample-wiki.zip"
+        archive_target.write_bytes(b"user archive")
+        with self.assertRaisesRegex(ADWikiError, "non-identical output archive"):
+            build_wiki_skill(
+                self.repo,
+                output_parent=archive_parent,
+                output_format="both",
+            )
+        self.assertEqual(archive_target.read_bytes(), b"user archive")
+        self.assertFalse((archive_parent / "ad-sample-wiki").exists())
+
+    def test_both_rolls_back_only_archive_created_by_current_run(self) -> None:
+        output = self.root / "output"
+        original_publish = delivery._rename_no_replace
+
+        def fail_directory_publish(source: object, target: object) -> None:
+            target_path = Path(target)
+            if target_path.suffix == ".zip":
+                original_publish(source, target)
+                return
+            raise OSError("injected directory publication failure")
+
+        with patch(
+            "ad_wiki.delivery._rename_no_replace",
+            side_effect=fail_directory_publish,
+        ):
+            with self.assertRaisesRegex(
+                OSError, "injected directory publication failure"
+            ):
+                build_wiki_skill(
+                    self.repo,
+                    output_parent=output,
+                    output_format="both",
+                )
+        self.assertFalse((output / "ad-sample-wiki.zip").exists())
+        self.assertFalse((output / "ad-sample-wiki").exists())
+
+        existing = build_wiki_skill(
+            self.repo,
+            output_parent=output,
+            output_format="zip",
+        )
+        archive = Path(existing["archive"]["path"])
+        before = archive.read_bytes()
+        with patch(
+            "ad_wiki.delivery._rename_no_replace",
+            side_effect=fail_directory_publish,
+        ):
+            with self.assertRaisesRegex(
+                OSError, "injected directory publication failure"
+            ):
+                build_wiki_skill(
+                    self.repo,
+                    output_parent=output,
+                    output_format="both",
+                )
+        self.assertEqual(archive.read_bytes(), before)
+        self.assertFalse((output / "ad-sample-wiki").exists())
+
+    def test_both_rollback_preserves_archive_replaced_by_another_writer(self) -> None:
+        output = self.root / "output"
+        archive_target = output / "ad-sample-wiki.zip"
+        original_publish = delivery._rename_no_replace
+
+        def replace_archive_then_simulate_race(source: object, target: object) -> None:
+            target_path = Path(target)
+            if target_path.suffix == ".zip":
+                original_publish(source, target)
+                archive_target.unlink()
+                archive_target.write_bytes(b"replacement from another writer")
+                return
+            raise OSError("injected directory publication failure")
+
+        with patch(
+            "ad_wiki.delivery._rename_no_replace",
+            side_effect=replace_archive_then_simulate_race,
+        ):
+            with self.assertRaisesRegex(ADWikiError, "rollback ownership changed"):
+                build_wiki_skill(
+                    self.repo,
+                    output_parent=output,
+                    output_format="both",
+                )
+        self.assertEqual(
+            archive_target.read_bytes(), b"replacement from another writer"
+        )
+        self.assertFalse((output / "ad-sample-wiki").exists())
+
+    def test_publish_races_never_overwrite_competing_targets(self) -> None:
+        original_publish = delivery._rename_no_replace
+
+        archive_output = self.root / "archive-race"
+        archive_target = archive_output / "ad-sample-wiki.zip"
+
+        def create_archive_before_publish(source: object, target: object) -> None:
+            target_path = Path(target)
+            if target_path.suffix == ".zip":
+                target_path.write_bytes(b"concurrent archive")
+            original_publish(source, target)
+
+        with patch(
+            "ad_wiki.delivery._rename_no_replace",
+            side_effect=create_archive_before_publish,
+        ):
+            with self.assertRaisesRegex(ADWikiError, "appeared during publication"):
+                build_wiki_skill(
+                    self.repo,
+                    output_parent=archive_output,
+                    output_format="zip",
+                )
+        self.assertEqual(archive_target.read_bytes(), b"concurrent archive")
+
+        both_output = self.root / "directory-race"
+        directory_target = both_output / "ad-sample-wiki"
+
+        def create_directory_before_publish(source: object, target: object) -> None:
+            target_path = Path(target)
+            if target_path.suffix == ".zip":
+                original_publish(source, target)
+                return
+            target_path.mkdir()
+            (target_path / "concurrent.txt").write_text("concurrent directory\n")
+            original_publish(source, target)
+
+        with patch(
+            "ad_wiki.delivery._rename_no_replace",
+            side_effect=create_directory_before_publish,
+        ):
+            with self.assertRaisesRegex(ADWikiError, "appeared during publication"):
+                build_wiki_skill(
+                    self.repo,
+                    output_parent=both_output,
+                    output_format="both",
+                )
+        self.assertEqual(
+            (directory_target / "concurrent.txt").read_text(),
+            "concurrent directory\n",
+        )
+        self.assertFalse((both_output / "ad-sample-wiki.zip").exists())
 
     def test_clean_git_wiki_records_exact_revision(self) -> None:
         for args in (
@@ -231,7 +521,9 @@ class WikiSkillBuildTests(unittest.TestCase):
         self.assertFalse((self.root / "output/ad-sample-wiki").exists())
 
     def test_secret_material_blocks_publication_without_echoing_secret(self) -> None:
-        credential_fixture = "api_" + 'key = "' + "this-value-must-never-be-echoed" + '"\n'
+        credential_fixture = (
+            "api_" + 'key = "' + "this-value-must-never-be-echoed" + '"\n'
+        )
         self.update_registered_raw(credential_fixture)
         with self.assertRaises(ADWikiError) as raised:
             build_wiki_skill(self.repo, output_parent=self.root / "output")

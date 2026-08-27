@@ -118,11 +118,14 @@ class PackagingTests(unittest.TestCase):
         self.assertIn("allow_implicit_invocation: true", openai)
         for command in (
             "prepare_run.py",
+            "freeze_run.py",
             "apply_run.py",
             "review_run.py",
             "migrate_bundle.py",
         ):
             self.assertIn(command, skill)
+        self.assertIn("--evidence-json", skill)
+        self.assertIn("review_candidate.evidence_bindings", skill)
         self.assertIn("deprecated no-op shim", skill)
         self.assertNotIn("search_wiki.py", skill)
         self.assertNotIn("build_query_context.py", skill)
@@ -143,6 +146,9 @@ class PackagingTests(unittest.TestCase):
         self.assertIn("Bounded Raw fallback", skill)
         self.assertIn("Knowledge gap", skill)
         self.assertIn("Shell or script execution is optional", skill)
+        self.assertIn("one ephemeral multi-turn candidate", skill)
+        self.assertIn("at least medium risk", skill)
+        self.assertIn("staged candidate only", skill)
         self.assertIn("Do not substitute model memory", skill)
         self.assertIn("Never emit an absolute local path", skill)
         self.assertIn("reuse the current evidence", skill)
@@ -153,6 +159,12 @@ class PackagingTests(unittest.TestCase):
         self.assertIn("the Wiki is a compressed navigation", skill)
         self.assertIn("automatically read the exact upstream primary source", skill)
         self.assertIn("Do not ask the user to choose Wiki, Raw, code, or MCP evidence mode", skill)
+        self.assertIn("<plugin-root>/scripts/resolve_code_worktree.py", skill)
+        self.assertIn("bounded Raw fallback or exact local code resolution", skill)
+        self.assertIn("require only the selected path's command", skill)
+        self.assertIn("Never scan the workspace", skill)
+        self.assertIn("does not record the binding itself", skill)
+        self.assertIn("git show <revision>:<path>", skill)
         self.assertNotIn("search_wiki.py", skill)
         self.assertNotIn("build_query_context.py", skill)
         self.assertNotIn("Context Envelope", skill)
@@ -172,11 +184,17 @@ class PackagingTests(unittest.TestCase):
         self.assertIn("must not scan the Raw directory", contract)
         self.assertIn("Raw files, source code, and commits remain primary evidence", contract)
         self.assertIn("automatically consult the exact upstream primary source", contract)
+        self.assertIn("Exact local code resolution", contract)
+        self.assertIn("resolve_code_worktree.py", contract)
+        self.assertIn("git-object", contract)
+        self.assertIn("at most one ephemeral current candidate", contract)
+        self.assertIn("separate `apply`", contract)
 
         static_contract = STATIC_AGENT_FILES["AGENTS.md"]
         self.assertIn("prefer the installed AD Wiki Query runtime", static_contract)
         self.assertIn("never scan the Raw directory", static_contract)
         self.assertIn("the Wiki is path compression", static_contract)
+        self.assertIn("Never scan sibling/workspace repositories", static_contract)
 
         openai = (QUERY_SKILL_ROOT / "agents/openai.yaml").read_text()
         self.assertIn("$ad-wiki-query", openai)
@@ -187,6 +205,9 @@ class PackagingTests(unittest.TestCase):
         self.assertNotIn("TODO", skill)
         self.assertIn("every base Concept automatically evaluated", skill.split("---", 2)[1])
         self.assertIn("prepare_code_wiki.py", skill)
+        self.assertIn("bind_code_worktree.py", skill)
+        self.assertIn("host-local binding", skill)
+        self.assertIn("without scanning sibling directories", skill)
         self.assertIn("checkpoint_code_wiki.py", skill)
         self.assertIn("finalize_code_wiki.py", skill)
         self.assertIn("apply_run.py", skill)
@@ -279,6 +300,10 @@ class PackagingTests(unittest.TestCase):
             "prepare_run.py",
             "approve_run.py",
             "apply_run.py",
+            "freeze_run.py",
+            "bind_code_worktree.py",
+            "resolve_code_worktree.py",
+            "rebuild_code_source_registry.py",
             "review_run.py",
             "prepare_code_wiki.py",
             "checkpoint_code_wiki.py",

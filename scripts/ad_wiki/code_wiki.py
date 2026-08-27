@@ -36,6 +36,7 @@ from .runtime import (
     _save_run,
     _validation_evidence,
 )
+from .code_sources import bind_code_worktree, inspect_code_repository
 from .code_index.cache import cache_root_for, load_bindings, load_current_index, publish_bindings
 from .code_index.model import canonical_json_bytes
 from .code_index.query import query_graph
@@ -74,67 +75,6 @@ SECRET_PATTERNS = (
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
     re.compile(r"(?i)\b(?:password|secret|api[_-]?key|access[_-]?token)\s*[:=]\s*['\"][^'\"]{8,}['\"]"),
 )
-
-
-def _git(code_root: Path, *args: str, allow_failure: bool = False) -> str | None:
-    try:
-        result = subprocess.run(
-            ["git", *args],
-            cwd=code_root,
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=10,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise ADWikiError(f"cannot inspect Git code repository: {exc}") from exc
-    if result.returncode != 0:
-        if allow_failure:
-            return None
-        detail = (result.stderr or result.stdout).strip()
-        raise ADWikiError(f"cannot inspect Git code repository: {detail or 'git command failed'}")
-    return result.stdout.strip()
-
-
-def _normalize_remote(value: str | None) -> str | None:
-    if not value:
-        return None
-    remote = value.strip().rstrip("/")
-    scp = re.fullmatch(r"([^/@:]+@[^/:]+):(.+)", remote)
-    if scp:
-        remote = f"ssh://{scp.group(1)}/{scp.group(2)}"
-    if remote.endswith(".git"):
-        remote = remote[:-4]
-    return remote
-
-
-def inspect_code_repository(code_repo: str | Path) -> dict[str, Any]:
-    unresolved = Path(code_repo).expanduser()
-    if unresolved.is_symlink():
-        raise ADWikiError("code repository root must not use a symlink")
-    root = unresolved.resolve()
-    if not root.is_dir():
-        raise ADWikiError("code repository must be an existing Git worktree")
-    top_level = _git(root, "rev-parse", "--show-toplevel", allow_failure=True)
-    if top_level is None:
-        raise ADWikiError("code repository must be a Git worktree")
-    if Path(top_level).resolve() != root:
-        raise ADWikiError("code repository path must be the Git worktree root")
-    revision = _git(root, "rev-parse", "--verify", "HEAD^{commit}", allow_failure=True)
-    if revision is None or not re.fullmatch(r"[0-9a-f]{40}", revision):
-        raise ADWikiError("code repository requires a committed HEAD")
-    status = _git(root, "status", "--porcelain", "--untracked-files=all")
-    if status:
-        raise ADWikiError("code repository must be a clean Git worktree")
-    remote = _normalize_remote(_git(root, "remote", "get-url", "origin", allow_failure=True))
-    root_commits_text = _git(root, "rev-list", "--max-parents=0", "HEAD") or ""
-    return {
-        "remote": remote,
-        "repository": root.name,
-        "revision": revision,
-        "root_commits": sorted(line for line in root_commits_text.splitlines() if line),
-        "worktree_clean": True,
-    }
 
 
 def _has_code_wiki_source_tag(path: Path) -> bool:
@@ -340,6 +280,7 @@ def prepare_code_wiki(
     _, bundle, config = _configured_roots(root)
     _require_supported_profile(config)
     code_source = inspect_code_repository(code_repo)
+    bind_code_worktree(root, code_repo=code_repo)
     inventory = _concept_inventory(root, bundle)
     if not inventory:
         raise ADWikiError("Code Wiki requires at least one base Concept")
@@ -392,6 +333,7 @@ def prepare_code_wiki(
     ]
     reserved = [
         "ad-wiki.yaml",
+        ".ad-wiki/code-source-registry.json",
         ".ad-wiki/source-registry.json",
         _relative_posix(bundle / "index.md", root),
         _relative_posix(bundle / "log.md", root),

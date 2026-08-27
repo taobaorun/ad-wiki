@@ -18,8 +18,15 @@ from ad_wiki.code_wiki import (  # noqa: E402
     prepare_code_wiki,
 )
 from ad_wiki.code_index.cache import cache_root_for, load_bindings, load_current_index  # noqa: E402
+from ad_wiki.code_sources import (  # noqa: E402
+    inspect_code_repository,
+    load_code_source_registry,
+    rebuild_code_source_registry,
+    repository_key,
+    resolve_code_worktree,
+)
 from ad_wiki.core import ADWikiError, build_indexes, initialize_repository  # noqa: E402
-from ad_wiki.runtime import apply_run  # noqa: E402
+from ad_wiki.runtime import apply_run, review_run  # noqa: E402
 
 
 def concept_text(title: str, *, type_name: str = "Concept", tags: str = "[framework]") -> str:
@@ -303,6 +310,14 @@ No additional callers were inspected.
             result["code_wiki"]["code_source"]["remote"],
             "https://example.test/framework",
         )
+        resolution = resolve_code_worktree(
+            self.wiki,
+            canonical_remote="https://example.test/framework",
+            revision=before_head,
+            require_clean=True,
+        )
+        self.assertEqual(resolution["status"], "resolved")
+        self.assertEqual(resolution["resolution"]["path"], str(self.code))
         concepts = result["code_wiki"]["concepts"]
         self.assertEqual(
             [item["concept_id"] for item in concepts],
@@ -429,10 +444,82 @@ No additional callers were inspected.
 
         applied = apply_run(self.wiki, run_id=run_id)
         self.assertEqual(applied["status"], "VALIDATED")
+        self.assertIn(".ad-wiki/code-source-registry.json", applied["applied_set"])
         self.assertTrue((self.wiki / "wiki/implementations/concepts/lifecycle.md").is_file())
         self.assertIn("ad-code-wiki:start", (self.wiki / "wiki/concepts/lifecycle.md").read_text())
         self.assertIn(run_id, (self.wiki / "wiki/log.md").read_text())
         self.assertEqual(self.git("status", "--porcelain", "--untracked-files=all"), "")
+        registry = load_code_source_registry(self.wiki)
+        incremental_bytes = (self.wiki / ".ad-wiki/code-source-registry.json").read_bytes()
+        self.assertEqual(len(registry["sources"]), 1)
+        self.assertEqual(registry["sources"][0]["canonical_remote"], "https://example.test/framework")
+        self.assertEqual(registry["sources"][0]["snapshots"][0]["validated_run_id"], run_id)
+        (self.wiki / ".ad-wiki/code-source-registry.json").unlink()
+        rebuilt = rebuild_code_source_registry(self.wiki)
+        self.assertEqual(rebuilt["registry"], registry)
+        self.assertEqual(
+            (self.wiki / ".ad-wiki/code-source-registry.json").read_bytes(),
+            incremental_bytes,
+        )
+        review_run(
+            self.wiki,
+            run_id=run_id,
+            actor="human:reviewer",
+            decision="rejected",
+        )
+        (self.wiki / ".ad-wiki/code-source-registry.json").unlink()
+        rejected_rebuild = rebuild_code_source_registry(self.wiki)
+        self.assertEqual(rejected_rebuild["registry"], registry)
+
+    def test_remote_backed_registry_is_independent_of_worktree_basename(self) -> None:
+        def apply_docs_only(code_repo: Path, run_id: str) -> None:
+            prepared = prepare_code_wiki(
+                self.wiki,
+                code_repo=code_repo,
+                run_id=run_id,
+            )
+            self.stage_source_summary(prepared, run_id)
+            for concept in prepared["code_wiki"]["concepts"]:
+                checkpoint_code_wiki(
+                    self.wiki,
+                    code_repo=code_repo,
+                    run_id=run_id,
+                    concept_id=concept["concept_id"],
+                    status="docs-only",
+                    result={"reason": "No implementation page required."},
+                )
+            finalize_code_wiki(self.wiki, code_repo=code_repo, run_id=run_id)
+            apply_run(self.wiki, run_id=run_id)
+
+        apply_docs_only(self.code, "code-wiki-first-worktree")
+        second = self.root / "renamed-checkout"
+        self.git("clone", str(self.code), str(second), cwd=self.root)
+        self.git(
+            "remote",
+            "set-url",
+            "origin",
+            "https://example.test/framework.git",
+            cwd=second,
+        )
+        apply_docs_only(second, "code-wiki-second-worktree")
+
+        registry = load_code_source_registry(self.wiki)
+        self.assertEqual(len(registry["sources"]), 1)
+        self.assertEqual(registry["sources"][0]["repository"], "framework")
+        self.assertEqual(
+            {
+                snapshot["validated_run_id"]
+                for snapshot in registry["sources"][0]["snapshots"]
+            },
+            {"code-wiki-first-worktree", "code-wiki-second-worktree"},
+        )
+        incremental = (self.wiki / ".ad-wiki/code-source-registry.json").read_bytes()
+        (self.wiki / ".ad-wiki/code-source-registry.json").unlink()
+        rebuild_code_source_registry(self.wiki)
+        self.assertEqual(
+            (self.wiki / ".ad-wiki/code-source-registry.json").read_bytes(),
+            incremental,
+        )
 
     def test_rejects_pending_finalize_and_unfinalized_apply(self) -> None:
         run_id = "code-wiki-pending"
@@ -547,6 +634,7 @@ No additional callers were inspected.
         prepared = self.prepare(run_id)
         original_base = (self.wiki / "wiki/concepts/lifecycle.md").read_bytes()
         original_log = (self.wiki / "wiki/log.md").read_bytes()
+        original_registry = (self.wiki / ".ad-wiki/code-source-registry.json").read_bytes()
         result = self.stage_enriched(prepared, run_id, "concepts/lifecycle")
         revision = prepared["code_wiki"]["code_source"]["revision"]
         self.staged(run_id, prepared["code_wiki"]["source_summary_path"]).write_text(
@@ -587,6 +675,138 @@ Revision `{revision}`.
         self.assertEqual((self.wiki / "wiki/log.md").read_bytes(), original_log)
         self.assertFalse((self.wiki / "wiki/implementations/concepts/lifecycle.md").exists())
         self.assertFalse((self.wiki / prepared["code_wiki"]["source_summary_path"]).exists())
+        self.assertEqual(
+            (self.wiki / ".ad-wiki/code-source-registry.json").read_bytes(),
+            original_registry,
+        )
+        rebuilt = rebuild_code_source_registry(self.wiki)
+        self.assertEqual(rebuilt["registry"], {"sources": [], "version": 1})
+
+    def test_validated_code_wiki_retry_repairs_interrupted_registry_publication(self) -> None:
+        run_id = "code-wiki-registry-interrupt"
+        prepared = self.prepare(run_id)
+        self.stage_source_summary(prepared, run_id)
+        self.checkpoint_remaining_docs_only(prepared, run_id, exclude=set())
+        finalize_code_wiki(self.wiki, code_repo=self.code, run_id=run_id)
+
+        with patch(
+            "ad_wiki.runtime.register_validated_code_source",
+            side_effect=SystemExit("simulated interruption"),
+        ), self.assertRaisesRegex(SystemExit, "simulated interruption"):
+            apply_run(self.wiki, run_id=run_id)
+
+        report = json.loads(
+            (self.wiki / f".ad-wiki/runs/{run_id}/run.json").read_text()
+        )
+        self.assertEqual(report["status"], "VALIDATED")
+        self.assertTrue(
+            (self.wiki / prepared["code_wiki"]["source_summary_path"]).is_file()
+        )
+        self.assertEqual(
+            load_code_source_registry(self.wiki), {"sources": [], "version": 1}
+        )
+
+        repaired = apply_run(self.wiki, run_id=run_id)
+        self.assertEqual(repaired["result"], "unchanged")
+        registry = load_code_source_registry(self.wiki)
+        self.assertEqual(
+            registry["sources"][0]["snapshots"][0]["validated_run_id"], run_id
+        )
+
+    def test_registry_publication_error_rolls_back_validated_history(self) -> None:
+        run_id = "code-wiki-registry-error"
+        prepared = self.prepare(run_id)
+        self.stage_source_summary(prepared, run_id)
+        self.checkpoint_remaining_docs_only(prepared, run_id, exclude=set())
+        finalize_code_wiki(self.wiki, code_repo=self.code, run_id=run_id)
+
+        with patch(
+            "ad_wiki.runtime.register_validated_code_source",
+            side_effect=ADWikiError("simulated registry failure"),
+        ), self.assertRaisesRegex(ADWikiError, "simulated registry failure"):
+            apply_run(self.wiki, run_id=run_id)
+
+        report = json.loads(
+            (self.wiki / f".ad-wiki/runs/{run_id}/run.json").read_text()
+        )
+        self.assertEqual(report["status"], "FAILED")
+        self.assertNotIn("VALIDATED", {event.get("state") for event in report["events"]})
+        self.assertFalse(
+            (self.wiki / prepared["code_wiki"]["source_summary_path"]).exists()
+        )
+        self.assertEqual(
+            rebuild_code_source_registry(self.wiki)["registry"],
+            {"sources": [], "version": 1},
+        )
+
+    def test_registry_identity_conflict_does_not_poison_rebuild(self) -> None:
+        run_id = "code-wiki-registry-conflict"
+        source = inspect_code_repository(self.code)
+        registry_path = self.wiki / ".ad-wiki/code-source-registry.json"
+        conflicting = {
+            "sources": [
+                {
+                    "canonical_remote": source["remote"],
+                    "repository": "framework",
+                    "repository_key": repository_key(source),
+                    "root_commits": ["f" * 40],
+                    "snapshots": [],
+                }
+            ],
+            "version": 1,
+        }
+        registry_path.write_text(json.dumps(conflicting))
+        original = registry_path.read_bytes()
+        prepared = self.prepare(run_id)
+        self.stage_source_summary(prepared, run_id)
+        self.checkpoint_remaining_docs_only(prepared, run_id, exclude=set())
+        finalize_code_wiki(self.wiki, code_repo=self.code, run_id=run_id)
+
+        with self.assertRaisesRegex(ADWikiError, "conflicts with portable registry"):
+            apply_run(self.wiki, run_id=run_id)
+
+        report = json.loads(
+            (self.wiki / f".ad-wiki/runs/{run_id}/run.json").read_text()
+        )
+        self.assertEqual(report["status"], "FAILED")
+        self.assertNotIn("VALIDATED", {event.get("state") for event in report["events"]})
+        self.assertEqual(registry_path.read_bytes(), original)
+        self.assertEqual(
+            rebuild_code_source_registry(self.wiki)["registry"],
+            {"sources": [], "version": 1},
+        )
+
+    def test_review_repairs_interrupted_registry_before_approved_or_rejected_state(self) -> None:
+        for decision in ("approved", "rejected"):
+            with self.subTest(decision=decision):
+                run_id = f"code-wiki-review-repair-{decision}"
+                prepared = self.prepare(run_id)
+                self.stage_source_summary(prepared, run_id)
+                self.checkpoint_remaining_docs_only(prepared, run_id, exclude=set())
+                finalize_code_wiki(self.wiki, code_repo=self.code, run_id=run_id)
+
+                with patch(
+                    "ad_wiki.runtime.register_validated_code_source",
+                    side_effect=SystemExit("simulated interruption"),
+                ), self.assertRaises(SystemExit):
+                    apply_run(self.wiki, run_id=run_id)
+
+                reviewed = review_run(
+                    self.wiki,
+                    run_id=run_id,
+                    actor="human:reviewer",
+                    decision=decision,
+                )
+                self.assertEqual(
+                    reviewed["status"], "REVIEWED" if decision == "approved" else "FAILED"
+                )
+                registry = load_code_source_registry(self.wiki)
+                snapshots = [
+                    snapshot
+                    for source in registry["sources"]
+                    for snapshot in source["snapshots"]
+                ]
+                self.assertIn(run_id, {item["validated_run_id"] for item in snapshots})
 
     def test_finalize_rejects_unplanned_staged_files_and_wiki_drift(self) -> None:
         run_id = "code-wiki-extra"

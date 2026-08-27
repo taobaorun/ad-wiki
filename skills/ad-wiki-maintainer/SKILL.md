@@ -65,7 +65,18 @@ Default to one supervised source per operation. A Source Summary alone is not a 
 
 ### Writeback
 
-Write only reusable analysis, comparisons, decisions, or knowledge gaps. Navigate indexes, search Bundle Markdown, and read the related pages directly to establish the impact set. Then use the same prepare, stage, diff inspection, direct Apply, and optional Review transaction as Ingest.
+Write only reusable analysis, comparisons, decisions, or knowledge gaps. Navigate indexes, search Bundle Markdown, and read the related pages directly to establish the impact set.
+
+For a Query handoff that is multi-turn or medium/high risk:
+
+1. Treat the first `准备写回` / `writeback` intent as staging authority only.
+2. Pass every applicable `--review-reason`, one or more `--impact-json` entries, and every document/code source shown to the user as `--evidence-json` to `prepare_run.py`; then compile the exact staged write set and inspect the full semantic diff. Each impact entry names a write-set page and one claim added/changed/weakened/removed. A gated Writeback without frozen evidence bindings is invalid.
+3. Run `freeze_run.py --repo <repo> --run-id <run-id> --json`.
+4. Render affected pages/claims from frozen `review_candidate.impact_summary` and document/code evidence/revisions from frozen `review_candidate.evidence_bindings`; then show unresolved gaps, honest prevalidation, clickable staged paths, run ID, and candidate digest. Do not substitute different impact or evidence conclusions without creating a new run.
+5. Stop with live Wiki unchanged. Do not call Apply until a later user message explicitly says `apply` or equivalent for that unambiguous frozen run.
+6. On that later confirmation, call `apply_run.py --repo <repo> --run-id <run-id> --candidate-digest <digest> --json`. If any bound content drifted, create and present a new run rather than reusing confirmation.
+
+For an explicit single-turn low-risk handoff, retain the shared inspect/direct-Apply path. Do not create a new user-visible Writeback Skill; Query proposes and Maintainer owns staging/mutation.
 
 ### Lint
 
@@ -89,7 +100,10 @@ Run `<plugin-root>/scripts/migrate_bundle.py` to inspect the requested target. I
 - `build_index.py`: regenerate deterministic directory indexes.
 - `raw_diff_guard.py`: detect changed, missing, or escaping Raw files.
 - `inspect_wiki_health.py`: emit a read-only, evidence-linked Wiki health metric vector.
+- `bind_code_worktree.py`: record one explicitly supplied, validated host-local Git worktree in private cache.
+- `resolve_code_worktree.py`: resolve and revalidate an exact bound Git identity without scanning.
 - `prepare_run.py`: capture the plan, source hashes, and repository baseline.
+- `freeze_run.py`: freeze an exact review-gated staged candidate without changing live Wiki bytes.
 - `apply_run.py`: lock, drift-check, apply, index, log, validate, and roll back.
 - `review_run.py`: record a real post-apply semantic review.
 - `migrate_bundle.py`: report current Profile state or run a packaged migration path.

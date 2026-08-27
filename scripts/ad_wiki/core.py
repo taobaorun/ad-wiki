@@ -11,7 +11,7 @@ from typing import Any, Iterable
 from urllib.parse import unquote
 
 
-PLUGIN_VERSION = "1.8.0"
+PLUGIN_VERSION = "1.9.0"
 PROFILE_VERSION = "0.1"
 OKF_VERSION = "0.2"
 

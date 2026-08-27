@@ -8,7 +8,7 @@ sources:
     resource: urn:source:replace-me
     title: Source title
 generated:
-  by: ad-wiki/1.8.0
+  by: ad-wiki/1.9.0
   at: 2026-01-01T00:00:00Z
 status: draft
 coverage: full

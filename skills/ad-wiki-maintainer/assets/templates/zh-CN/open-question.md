@@ -7,7 +7,7 @@ sources:
   - id: source-key
     resource: urn:source:replace-me
 generated:
-  by: ad-wiki/1.8.0
+  by: ad-wiki/1.9.0
   at: 2026-01-01T00:00:00Z
 status: draft
 ---

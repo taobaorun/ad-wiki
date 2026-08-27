@@ -18,10 +18,12 @@ from ad_wiki.core import (  # noqa: E402
     initialize_repository,
     register_source,
     validate_repository,
+    write_run_report,
 )
 from ad_wiki.runtime import (  # noqa: E402
     apply_run,
     approve_run,
+    freeze_run,
     migrate_repository,
     prepare_run,
     query_registered_raw,
@@ -63,7 +65,16 @@ class RuntimeTestCase(unittest.TestCase):
         register_source(self.repo, source, "urn:test:source-a")
         return source
 
-    def prepare(self, run_id: str, *, risk: str = "medium", target: str = "wiki/concepts/compilation.md") -> Path:
+    def prepare(
+        self,
+        run_id: str,
+        *,
+        risk: str = "medium",
+        target: str = "wiki/concepts/compilation.md",
+        review_reasons: tuple[str, ...] = (),
+        evidence_bindings: tuple[dict, ...] = (),
+        impact_summary: tuple[dict, ...] = (),
+    ) -> Path:
         source = self.repo / "raw/inbox/source.md"
         if not source.exists():
             self.register()
@@ -75,6 +86,9 @@ class RuntimeTestCase(unittest.TestCase):
             inputs=["raw/inbox/source.md"],
             read_set=["wiki/index.md"],
             write_set=[target],
+            review_reasons=review_reasons,
+            evidence_bindings=evidence_bindings,
+            impact_summary=impact_summary,
         )
         staged = self.repo / ".ad-wiki/runs" / run_id / "staged" / target
         staged.parent.mkdir(parents=True, exist_ok=True)
@@ -85,6 +99,345 @@ class RuntimeTestCase(unittest.TestCase):
 
 
 class TransactionTests(RuntimeTestCase):
+    def test_review_gated_run_freezes_exact_candidate_before_apply(self) -> None:
+        source = self.register()
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        staged = self.prepare(
+            "run-review-gated",
+            review_reasons=("medium-risk", "multi-turn"),
+            evidence_bindings=(
+                {"kind": "raw", "sha256": digest, "source_id": f"SRC-{digest[:12].upper()}"},
+            ),
+            impact_summary=(
+                {
+                    "change": "changed",
+                    "path": "wiki/concepts/compilation.md",
+                    "summary": "Clarifies reviewed candidate behavior.",
+                },
+            ),
+        )
+        staged.write_text(concept_text("Reviewed Candidate"))
+
+        with self.assertRaisesRegex(ADWikiError, "must be frozen"):
+            apply_run(self.repo, run_id="run-review-gated")
+        self.assertFalse((self.repo / "wiki/concepts/compilation.md").exists())
+
+        frozen = freeze_run(self.repo, run_id="run-review-gated")
+        candidate = frozen["review_candidate"]
+        self.assertEqual(frozen["status"], "REVIEW_REQUIRED")
+        self.assertEqual(frozen["result"], "frozen")
+        self.assertEqual(
+            freeze_run(self.repo, run_id="run-review-gated")["result"],
+            "unchanged",
+        )
+        self.assertFalse((self.repo / "wiki/concepts/compilation.md").exists())
+
+        with self.assertRaisesRegex(ADWikiError, "requires the frozen"):
+            apply_run(self.repo, run_id="run-review-gated")
+        with self.assertRaisesRegex(ADWikiError, "does not match"):
+            apply_run(self.repo, run_id="run-review-gated", candidate_digest="0" * 64)
+
+        applied = apply_run(
+            self.repo,
+            run_id="run-review-gated",
+            candidate_digest=candidate["candidate_digest"],
+        )
+        self.assertEqual(applied["status"], "VALIDATED")
+        self.assertIn("Reviewed Candidate", (self.repo / "wiki/concepts/compilation.md").read_text())
+
+    def test_review_candidate_invalidates_on_staged_or_evidence_change(self) -> None:
+        staged = self.prepare(
+            "run-review-tampered",
+            review_reasons=("explicit",),
+            impact_summary=(
+                {
+                    "change": "changed",
+                    "path": "wiki/concepts/compilation.md",
+                    "summary": "Freezes the reviewed conclusion.",
+                },
+            ),
+        )
+        staged.write_text(concept_text("Before Freeze"))
+        frozen = freeze_run(self.repo, run_id="run-review-tampered")
+        staged.write_text(concept_text("After Freeze"))
+
+        with self.assertRaisesRegex(ADWikiError, "changed after review freeze"):
+            apply_run(
+                self.repo,
+                run_id="run-review-tampered",
+                candidate_digest=frozen["review_candidate"]["candidate_digest"],
+            )
+        self.assertEqual(self.report("run-review-tampered")["status"], "FAILED")
+        self.assertFalse((self.repo / "wiki/concepts/compilation.md").exists())
+
+    def test_review_candidate_invalidates_when_frozen_impact_changes(self) -> None:
+        staged = self.prepare(
+            "run-impact-tampered",
+            review_reasons=("multi-turn",),
+            impact_summary=(
+                {
+                    "change": "weakened",
+                    "path": "wiki/concepts/compilation.md",
+                    "summary": "Narrows the earlier conclusion.",
+                },
+            ),
+        )
+        staged.write_text(concept_text("Impact Bound"))
+        frozen = freeze_run(self.repo, run_id="run-impact-tampered")
+        report = self.report("run-impact-tampered")
+        report["impact_summary"][0]["summary"] = "Materially different conclusion."
+        (self.repo / ".ad-wiki/runs/run-impact-tampered/run.json").write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n"
+        )
+
+        with self.assertRaisesRegex(ADWikiError, "changed after review freeze"):
+            apply_run(
+                self.repo,
+                run_id="run-impact-tampered",
+                candidate_digest=frozen["review_candidate"]["candidate_digest"],
+            )
+        self.assertEqual(self.report("run-impact-tampered")["status"], "FAILED")
+
+    def test_nested_review_candidate_tampering_invalidates_confirmation(self) -> None:
+        source = self.register()
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        mutations = {
+            "impact": lambda candidate: candidate["impact_summary"][0].update(
+                summary="Different displayed conclusion."
+            ),
+            "evidence": lambda candidate: candidate.update(evidence_bindings=[]),
+            "write_set": lambda candidate: candidate.update(write_set=[]),
+            "baseline": lambda candidate: candidate.update(baseline={}),
+        }
+        for label, mutate in mutations.items():
+            with self.subTest(label=label):
+                run_id = f"run-nested-{label}"
+                staged = self.prepare(
+                    run_id,
+                    review_reasons=("multi-turn",),
+                    evidence_bindings=(
+                        {
+                            "kind": "raw",
+                            "sha256": digest,
+                            "source_id": f"SRC-{digest[:12].upper()}",
+                        },
+                    ),
+                    impact_summary=(
+                        {
+                            "change": "changed",
+                            "path": "wiki/concepts/compilation.md",
+                            "summary": "Original displayed conclusion.",
+                        },
+                    ),
+                )
+                staged.write_text(concept_text(label))
+                frozen = freeze_run(self.repo, run_id=run_id)
+                report = self.report(run_id)
+                mutate(report["review_candidate"])
+                (self.repo / f".ad-wiki/runs/{run_id}/run.json").write_text(
+                    json.dumps(report, indent=2, sort_keys=True) + "\n"
+                )
+
+                with self.assertRaisesRegex(ADWikiError, "changed after review freeze"):
+                    apply_run(
+                        self.repo,
+                        run_id=run_id,
+                        candidate_digest=frozen["review_candidate"]["candidate_digest"],
+                    )
+                self.assertEqual(self.report(run_id)["status"], "FAILED")
+
+    def test_legacy_reporter_cannot_overwrite_transaction_owned_run(self) -> None:
+        staged = self.prepare(
+            "run-owned-gate",
+            review_reasons=("medium-risk",),
+            impact_summary=(
+                {
+                    "change": "changed",
+                    "path": "wiki/concepts/compilation.md",
+                    "summary": "Requires review.",
+                },
+            ),
+        )
+        staged.write_text(concept_text())
+        with self.assertRaisesRegex(ADWikiError, "transaction-owned run"):
+            write_run_report(
+                self.repo,
+                run_id="run-owned-gate",
+                operation="ingest",
+                state="APPLIED",
+                risk="medium",
+                inputs=["raw/inbox/source.md"],
+                read_set=["wiki/index.md"],
+                write_set=["wiki/concepts/compilation.md"],
+                validations=[{"name": "fake", "status": "passed"}],
+            )
+        with self.assertRaisesRegex(ADWikiError, "must be frozen"):
+            apply_run(self.repo, run_id="run-owned-gate")
+
+    def test_current_review_gate_cannot_bypass_digest_via_legacy_status(self) -> None:
+        for legacy_state in ("APPROVED", "AUTO_APPROVED"):
+            with self.subTest(legacy_state=legacy_state):
+                run_id = f"run-gate-{legacy_state.lower()}"
+                staged = self.prepare(
+                    run_id,
+                    review_reasons=("multi-turn",),
+                    impact_summary=(
+                        {
+                            "change": "changed",
+                            "path": "wiki/concepts/compilation.md",
+                            "summary": "Bound current candidate.",
+                        },
+                    ),
+                )
+                staged.write_text(concept_text(legacy_state))
+                frozen = freeze_run(self.repo, run_id=run_id)
+                report = self.report(run_id)
+                report["status"] = legacy_state
+                (self.repo / f".ad-wiki/runs/{run_id}/run.json").write_text(
+                    json.dumps(report, indent=2, sort_keys=True) + "\n"
+                )
+
+                with self.assertRaisesRegex(ADWikiError, "requires the frozen"):
+                    apply_run(self.repo, run_id=run_id)
+                applied = apply_run(
+                    self.repo,
+                    run_id=run_id,
+                    candidate_digest=frozen["review_candidate"]["candidate_digest"],
+                )
+                self.assertEqual(applied["status"], "VALIDATED")
+
+    def test_current_lineage_fails_closed_when_frozen_gate_payload_is_removed(self) -> None:
+        staged = self.prepare(
+            "run-lineage-gate",
+            review_reasons=("multi-turn",),
+            impact_summary=(
+                {
+                    "change": "changed",
+                    "path": "wiki/concepts/compilation.md",
+                    "summary": "Bound current candidate.",
+                },
+            ),
+        )
+        staged.write_text(concept_text("Lineage"))
+        freeze_run(self.repo, run_id="run-lineage-gate")
+        report = self.report("run-lineage-gate")
+        report["review_reasons"] = []
+        report.pop("review_candidate")
+        (self.repo / ".ad-wiki/runs/run-lineage-gate/run.json").write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n"
+        )
+
+        with self.assertRaisesRegex(ADWikiError, "missing its frozen candidate"):
+            apply_run(self.repo, run_id="run-lineage-gate")
+
+    def test_prepare_resumes_legacy_run_without_new_optional_fields(self) -> None:
+        self.prepare("run-legacy-resume", risk="low")
+        report = self.report("run-legacy-resume")
+        for key in ("evidence_bindings", "impact_summary", "review_reasons"):
+            report.pop(key)
+        (self.repo / ".ad-wiki/runs/run-legacy-resume/run.json").write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n"
+        )
+
+        resumed = prepare_run(
+            self.repo,
+            run_id="run-legacy-resume",
+            operation="ingest",
+            risk="low",
+            inputs=["raw/inbox/source.md"],
+            read_set=["wiki/index.md"],
+            write_set=["wiki/concepts/compilation.md"],
+        )
+
+        self.assertEqual(resumed["result"], "unchanged")
+
+    def test_ungated_run_rejects_unexpected_candidate_digest(self) -> None:
+        staged = self.prepare("run-ungated-digest", risk="low")
+        staged.write_text(concept_text())
+        with self.assertRaisesRegex(ADWikiError, "does not accept"):
+            apply_run(
+                self.repo,
+                run_id="run-ungated-digest",
+                candidate_digest="0" * 64,
+            )
+        self.assertEqual(self.report("run-ungated-digest")["status"], "PLANNED")
+
+    def test_prepare_rejects_invalid_review_and_evidence_contracts(self) -> None:
+        with self.assertRaisesRegex(ADWikiError, "at least medium risk"):
+            self.prepare(
+                "run-low-multi-turn",
+                risk="low",
+                review_reasons=("multi-turn",),
+            )
+        with self.assertRaisesRegex(ADWikiError, "medium-risk review reason"):
+            self.prepare(
+                "run-high-medium-label",
+                risk="high",
+                review_reasons=("medium-risk",),
+            )
+        with self.assertRaisesRegex(ADWikiError, "high-risk review reason"):
+            self.prepare(
+                "run-medium-high-label",
+                risk="medium",
+                review_reasons=("high-risk",),
+            )
+        with self.assertRaisesRegex(ADWikiError, "review reasons"):
+            self.prepare("run-bad-reason", review_reasons=("automatic",))
+        with self.assertRaisesRegex(ADWikiError, "unknown or missing"):
+            self.prepare(
+                "run-bad-evidence",
+                evidence_bindings=(
+                    {"kind": "raw", "sha256": "0" * 64, "source_id": "SRC-000000000000", "path": "/tmp/raw"},
+                ),
+            )
+
+    def test_review_gated_writeback_requires_frozen_evidence(self) -> None:
+        prepare_run(
+            self.repo,
+            run_id="run-writeback-no-evidence",
+            operation="writeback",
+            risk="medium",
+            inputs=[],
+            read_set=["wiki/index.md"],
+            write_set=["wiki/concepts/compilation.md"],
+            review_reasons=["medium-risk"],
+            impact_summary=[
+                {
+                    "change": "changed",
+                    "path": "wiki/concepts/compilation.md",
+                    "summary": "Claims evidence-bound review.",
+                }
+            ],
+        )
+        staged = (
+            self.repo
+            / ".ad-wiki/runs/run-writeback-no-evidence/staged/wiki/concepts/compilation.md"
+        )
+        staged.parent.mkdir(parents=True)
+        staged.write_text(concept_text())
+
+        with self.assertRaisesRegex(ADWikiError, "requires frozen evidence"):
+            freeze_run(self.repo, run_id="run-writeback-no-evidence")
+        with self.assertRaisesRegex(ADWikiError, "malformed code evidence"):
+            self.prepare(
+                "run-credential-evidence",
+                evidence_bindings=(
+                    {
+                        "canonical_remote": "https://token@example.test/org/repo",
+                        "kind": "code",
+                        "revision": "0" * 40,
+                        "source_id": "CODE-FRAMEWORK",
+                    },
+                ),
+            )
+        with self.assertRaisesRegex(ADWikiError, "impact path"):
+            self.prepare(
+                "run-bad-impact",
+                impact_summary=(
+                    {"change": "changed", "path": "wiki/other.md", "summary": "Wrong path."},
+                ),
+            )
+
     def test_applies_indexes_logs_validates_and_reviews_one_write_set(self) -> None:
         staged = self.prepare("run-success")
         staged.write_text(concept_text())
@@ -260,6 +613,7 @@ class TransactionTests(RuntimeTestCase):
         staged = self.prepare("run-legacy-approved", risk="high")
         staged.write_text(concept_text("Legacy Approved"))
         report = self.report("run-legacy-approved")
+        report.pop("transaction_schema_version")
         report["status"] = "APPROVED"
         report["approvals"] = [
             {"at": "2026-08-18T00:00:00Z", "by": "human:legacy", "risk": "high"}
@@ -280,6 +634,7 @@ class TransactionTests(RuntimeTestCase):
         staged = self.prepare("run-legacy-changed", risk="low")
         staged.write_text(concept_text("Before Legacy Approval"))
         report = self.report("run-legacy-changed")
+        report.pop("transaction_schema_version")
         report["status"] = "AUTO_APPROVED"
         report["approved_staged_hashes"] = {
             "wiki/concepts/compilation.md": hashlib.sha256(staged.read_bytes()).hexdigest()

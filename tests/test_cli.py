@@ -206,6 +206,153 @@ Knowledge is compiled once and maintained.[^paper]
         migrated = self.run_cli("migrate_bundle.py", "--repo", str(self.repo))
         self.assertEqual(migrated["status"], "current")
 
+    def test_review_gated_writeback_cli_freezes_and_applies_exact_digest(self) -> None:
+        self.run_cli("init_bundle.py", "--repo", str(self.repo), "--domain", "research")
+        prepared = self.run_cli(
+            "prepare_run.py",
+            "--repo",
+            str(self.repo),
+            "--run-id",
+            "run-cli-reviewed",
+            "--operation",
+            "writeback",
+            "--risk",
+            "medium",
+            "--read",
+            "wiki/index.md",
+            "--write",
+            "wiki/concepts/reviewed.md",
+            "--review-reason",
+            "multi-turn",
+            "--review-reason",
+            "medium-risk",
+            "--impact-json",
+            json.dumps(
+                {
+                    "change": "added",
+                    "path": "wiki/concepts/reviewed.md",
+                    "summary": "Adds the reviewed candidate.",
+                }
+            ),
+            "--evidence-json",
+            json.dumps(
+                {
+                    "canonical_remote": "https://example.test/framework",
+                    "kind": "code",
+                    "revision": "0" * 40,
+                    "source_id": "CODE-FRAMEWORK",
+                }
+            ),
+        )
+        self.assertEqual(prepared["review_reasons"], ["medium-risk", "multi-turn"])
+        staged = self.repo / ".ad-wiki/runs/run-cli-reviewed/staged/wiki/concepts/reviewed.md"
+        staged.parent.mkdir(parents=True)
+        staged.write_text(
+            """---
+type: Concept
+title: Reviewed
+description: Reviewed candidate.
+status: draft
+---
+
+# Reviewed
+"""
+        )
+
+        blocked = self.run_cli(
+            "apply_run.py",
+            "--repo",
+            str(self.repo),
+            "--run-id",
+            "run-cli-reviewed",
+            expected=2,
+        )
+        self.assertIn("must be frozen", blocked["error"])
+        frozen = self.run_cli(
+            "freeze_run.py",
+            "--repo",
+            str(self.repo),
+            "--run-id",
+            "run-cli-reviewed",
+        )
+        applied = self.run_cli(
+            "apply_run.py",
+            "--repo",
+            str(self.repo),
+            "--run-id",
+            "run-cli-reviewed",
+            "--candidate-digest",
+            frozen["review_candidate"]["candidate_digest"],
+        )
+        self.assertEqual(applied["status"], "VALIDATED")
+
+    def test_legacy_report_cli_cannot_overwrite_review_gated_transaction(self) -> None:
+        self.run_cli("init_bundle.py", "--repo", str(self.repo), "--domain", "research")
+        self.run_cli(
+            "prepare_run.py",
+            "--repo",
+            str(self.repo),
+            "--run-id",
+            "run-cli-owned",
+            "--operation",
+            "writeback",
+            "--risk",
+            "medium",
+            "--read",
+            "wiki/index.md",
+            "--write",
+            "wiki/concepts/owned.md",
+            "--review-reason",
+            "medium-risk",
+            "--impact-json",
+            json.dumps(
+                {
+                    "change": "changed",
+                    "path": "wiki/concepts/owned.md",
+                    "summary": "Requires review.",
+                }
+            ),
+        )
+        result = self.run_cli(
+            "write_run_report.py",
+            "--repo",
+            str(self.repo),
+            "--run-id",
+            "run-cli-owned",
+            "--operation",
+            "writeback",
+            "--state",
+            "APPLIED",
+            "--risk",
+            "medium",
+            "--write",
+            "wiki/concepts/owned.md",
+            expected=2,
+        )
+        self.assertIn("transaction-owned run", result["error"])
+
+    def test_prepare_cli_rejects_multi_turn_risk_downgrade(self) -> None:
+        self.run_cli("init_bundle.py", "--repo", str(self.repo), "--domain", "research")
+        result = self.run_cli(
+            "prepare_run.py",
+            "--repo",
+            str(self.repo),
+            "--run-id",
+            "run-low-multi",
+            "--operation",
+            "writeback",
+            "--risk",
+            "low",
+            "--read",
+            "wiki/index.md",
+            "--write",
+            "wiki/concepts/example.md",
+            "--review-reason",
+            "multi-turn",
+            expected=2,
+        )
+        self.assertIn("at least medium risk", result["error"])
+
     def test_cli_errors_are_structured(self) -> None:
         result = self.run_cli("validate_bundle.py", "--repo", str(self.repo), expected=2)
         self.assertEqual(result["status"], "error")

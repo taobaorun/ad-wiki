@@ -28,12 +28,18 @@ from .code_wiki import (
     prepare_code_wiki,
     publish_code_wiki_bindings,
 )
-from .code_wiki import inspect_code_repository
+from .code_sources import (
+    bind_code_worktree,
+    inspect_code_repository,
+    rebuild_code_source_registry,
+    resolve_code_worktree,
+)
 from .code_index.cache import build_or_update_index, cache_root_for, load_current_index
 from .code_index.query import query_graph
 from .runtime import (
     apply_run,
     approve_run,
+    freeze_run,
     migrate_repository,
     prepare_run,
     query_registered_raw,
@@ -192,9 +198,40 @@ def prepare_main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--input", action="append", default=[], dest="inputs")
     parser.add_argument("--read", action="append", default=[], dest="read_set")
     parser.add_argument("--write", action="append", required=True, dest="write_set")
-    return _execute(
-        parser,
-        lambda args: (
+    parser.add_argument(
+        "--review-reason",
+        action="append",
+        default=[],
+        choices=["explicit", "high-risk", "medium-risk", "multi-turn"],
+        dest="review_reasons",
+    )
+    parser.add_argument(
+        "--evidence-json",
+        action="append",
+        default=[],
+        help="bounded Raw/code evidence object; repeat as needed",
+    )
+    parser.add_argument(
+        "--impact-json",
+        action="append",
+        default=[],
+        help="frozen impact {path,change,summary}; repeat as needed",
+    )
+
+    def runner(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
+        evidence_bindings: list[dict[str, Any]] = []
+        for raw in args.evidence_json:
+            value = json.loads(raw)
+            if not isinstance(value, dict):
+                raise ADWikiError("each --evidence-json value must be a JSON object")
+            evidence_bindings.append(value)
+        impact_summary: list[dict[str, Any]] = []
+        for raw in args.impact_json:
+            value = json.loads(raw)
+            if not isinstance(value, dict):
+                raise ADWikiError("each --impact-json value must be a JSON object")
+            impact_summary.append(value)
+        return (
             prepare_run(
                 args.repo,
                 run_id=args.run_id,
@@ -203,9 +240,16 @@ def prepare_main(argv: Sequence[str] | None = None) -> int:
                 inputs=args.inputs,
                 read_set=args.read_set,
                 write_set=args.write_set,
+                review_reasons=args.review_reasons,
+                evidence_bindings=evidence_bindings,
+                impact_summary=impact_summary,
             ),
             0,
-        ),
+        )
+
+    return _execute(
+        parser,
+        runner,
         argv,
     )
 
@@ -310,6 +354,42 @@ def build_code_index_main(argv: Sequence[str] | None = None) -> int:
     return _execute(parser, runner, argv)
 
 
+def bind_code_worktree_main(argv: Sequence[str] | None = None) -> int:
+    parser = _base_parser("Bind one explicit local Git worktree to portable code identity.")
+    parser.add_argument("--code-repo", required=True)
+    return _execute(
+        parser,
+        lambda args: (bind_code_worktree(args.repo, code_repo=args.code_repo), 0),
+        argv,
+    )
+
+
+def resolve_code_worktree_main(argv: Sequence[str] | None = None) -> int:
+    parser = _base_parser("Resolve one exact local Git worktree without directory scanning.")
+    identity = parser.add_mutually_exclusive_group(required=True)
+    identity.add_argument("--canonical-remote")
+    identity.add_argument("--repository-key")
+    parser.add_argument("--revision")
+    parser.add_argument("--require-clean", action="store_true")
+
+    def runner(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
+        payload = resolve_code_worktree(
+            args.repo,
+            canonical_remote=args.canonical_remote,
+            repository_key=args.repository_key,
+            revision=args.revision,
+            require_clean=args.require_clean,
+        )
+        return payload, 0 if payload["status"] == "resolved" else 1
+
+    return _execute(parser, runner, argv)
+
+
+def rebuild_code_source_registry_main(argv: Sequence[str] | None = None) -> int:
+    parser = _base_parser("Rebuild portable code source identity from validated Code Wiki runs.")
+    return _execute(parser, lambda args: (rebuild_code_source_registry(args.repo), 0), argv)
+
+
 def query_code_index_main(argv: Sequence[str] | None = None) -> int:
     parser = _base_parser("Query the successful deterministic structural code index.")
     parser.add_argument("--code-repo", required=True)
@@ -380,7 +460,25 @@ def approve_main(argv: Sequence[str] | None = None) -> int:
 def apply_main(argv: Sequence[str] | None = None) -> int:
     parser = _base_parser("Apply, index, log, validate, and finalize a staged transaction.")
     parser.add_argument("--run-id", required=True)
-    return _execute(parser, lambda args: (apply_run(args.repo, run_id=args.run_id), 0), argv)
+    parser.add_argument("--candidate-digest")
+    return _execute(
+        parser,
+        lambda args: (
+            apply_run(
+                args.repo,
+                run_id=args.run_id,
+                candidate_digest=args.candidate_digest,
+            ),
+            0,
+        ),
+        argv,
+    )
+
+
+def freeze_main(argv: Sequence[str] | None = None) -> int:
+    parser = _base_parser("Freeze a review-gated staged transaction before Apply.")
+    parser.add_argument("--run-id", required=True)
+    return _execute(parser, lambda args: (freeze_run(args.repo, run_id=args.run_id), 0), argv)
 
 
 def review_main(argv: Sequence[str] | None = None) -> int:

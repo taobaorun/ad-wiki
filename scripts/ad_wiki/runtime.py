@@ -7,9 +7,8 @@ import re
 import tempfile
 from bisect import bisect_right
 from collections import Counter
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterable, Iterator
+from typing import Any, Iterable
 
 from .core import (
     ADWikiError,
@@ -42,6 +41,8 @@ from .core import (
     guard_raw,
     validate_repository,
 )
+from .code_sources import normalize_remote, register_validated_code_source
+from .locking import repository_lock
 
 
 WRITABLE_OPERATIONS = {"code-wiki", "ingest", "writeback", "lint", "migrate"}
@@ -90,6 +91,14 @@ QUERY_TOKEN_NOISE = frozenset(
     }
 )
 CONCEPT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*")
+REVIEW_REASONS = frozenset({"explicit", "high-risk", "medium-risk", "multi-turn"})
+TRANSACTION_SCHEMA_VERSION = "2"
+EVIDENCE_KINDS = frozenset({"code", "raw"})
+MAX_EVIDENCE_BINDINGS = 64
+MAX_EVIDENCE_STRING = 2_048
+IMPACT_CHANGES = frozenset({"added", "changed", "removed", "weakened"})
+MAX_IMPACT_ENTRIES = 128
+MAX_IMPACT_SUMMARY = 1_000
 
 
 def _run_path(root: Path, run_id: str) -> Path:
@@ -172,6 +181,110 @@ def _registered_source_hashes(root: Path, inputs: list[str], operation: str) -> 
     return hashes
 
 
+def _canonical_json_bytes(value: Any) -> bytes:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+
+
+def _normalize_review_reasons(values: Iterable[str]) -> list[str]:
+    reasons = list(values)
+    if not all(isinstance(item, str) and item in REVIEW_REASONS for item in reasons):
+        raise ADWikiError(
+            "review reasons must be one of: " + ", ".join(sorted(REVIEW_REASONS))
+        )
+    return sorted(set(reasons))
+
+
+def _bounded_evidence_string(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not value.strip() or len(value) > MAX_EVIDENCE_STRING:
+        raise ADWikiError(f"evidence {label} must be a non-empty bounded string")
+    return value.strip()
+
+
+def _normalize_evidence_bindings(root: Path, values: Iterable[dict[str, Any]]) -> list[dict[str, str]]:
+    bindings = list(values)
+    if len(bindings) > MAX_EVIDENCE_BINDINGS:
+        raise ADWikiError(f"evidence binding count exceeds {MAX_EVIDENCE_BINDINGS}")
+    registry = _load_registry(root)
+    raw_by_id = {record["source_id"]: record for record in registry["sources"]}
+    normalized: list[dict[str, str]] = []
+    for index, value in enumerate(bindings):
+        if not isinstance(value, dict) or value.get("kind") not in EVIDENCE_KINDS:
+            raise ADWikiError(f"unsupported evidence binding at index {index}")
+        kind = str(value["kind"])
+        if kind == "raw":
+            if set(value) != {"kind", "sha256", "source_id"}:
+                raise ADWikiError(f"raw evidence binding has unknown or missing fields at index {index}")
+            source_id = _bounded_evidence_string(value.get("source_id"), "source_id")
+            sha256 = _bounded_evidence_string(value.get("sha256"), "sha256")
+            if not re.fullmatch(r"SRC-[A-F0-9]{12}", source_id) or not re.fullmatch(
+                r"[0-9a-f]{64}", sha256
+            ):
+                raise ADWikiError(f"malformed Raw evidence binding at index {index}")
+            record = raw_by_id.get(source_id)
+            if record is None or record["sha256"] != sha256:
+                raise ADWikiError(f"Raw evidence binding is not registered at index {index}")
+            normalized.append({"kind": kind, "sha256": sha256, "source_id": source_id})
+            continue
+        if set(value) != {"canonical_remote", "kind", "revision", "source_id"}:
+            raise ADWikiError(f"code evidence binding has unknown or missing fields at index {index}")
+        source_id = _bounded_evidence_string(value.get("source_id"), "source_id")
+        remote = _bounded_evidence_string(value.get("canonical_remote"), "canonical_remote")
+        revision = _bounded_evidence_string(value.get("revision"), "revision")
+        if (
+            not re.fullmatch(r"CODE-[A-Z0-9][A-Z0-9._-]{1,127}", source_id)
+            or not re.fullmatch(r"[0-9a-f]{40}", revision)
+            or normalize_remote(remote) != remote
+        ):
+            raise ADWikiError(f"malformed code evidence binding at index {index}")
+        normalized.append(
+            {
+                "canonical_remote": remote,
+                "kind": kind,
+                "revision": revision,
+                "source_id": source_id,
+            }
+        )
+    unique = {json.dumps(item, ensure_ascii=False, sort_keys=True): item for item in normalized}
+    return [unique[key] for key in sorted(unique)]
+
+
+def _normalize_impact_summary(
+    write_set: list[str], values: Iterable[dict[str, Any]]
+) -> list[dict[str, str]]:
+    entries = list(values)
+    if len(entries) > MAX_IMPACT_ENTRIES:
+        raise ADWikiError(f"impact summary count exceeds {MAX_IMPACT_ENTRIES}")
+    normalized: list[dict[str, str]] = []
+    for index, value in enumerate(entries):
+        if not isinstance(value, dict) or set(value) != {"change", "path", "summary"}:
+            raise ADWikiError(f"impact summary has unknown or missing fields at index {index}")
+        change = value.get("change")
+        path = value.get("path")
+        summary = value.get("summary")
+        if change not in IMPACT_CHANGES:
+            raise ADWikiError(f"unsupported impact change at index {index}")
+        if not isinstance(path, str) or path not in write_set:
+            raise ADWikiError(f"impact path is not in the write set at index {index}")
+        if (
+            not isinstance(summary, str)
+            or not summary.strip()
+            or len(summary) > MAX_IMPACT_SUMMARY
+            or "\n" in summary
+            or "\r" in summary
+        ):
+            raise ADWikiError(f"impact summary must be one bounded line at index {index}")
+        normalized.append(
+            {"change": str(change), "path": path, "summary": summary.strip()}
+        )
+    unique = {json.dumps(item, ensure_ascii=False, sort_keys=True): item for item in normalized}
+    return [unique[key] for key in sorted(unique)]
+
+
 def _validate_write_targets(
     root: Path,
     bundle: Path,
@@ -228,6 +341,9 @@ def prepare_run(
     inputs: Iterable[str],
     read_set: Iterable[str],
     write_set: Iterable[str],
+    review_reasons: Iterable[str] = (),
+    evidence_bindings: Iterable[dict[str, Any]] = (),
+    impact_summary: Iterable[dict[str, Any]] = (),
 ) -> dict[str, Any]:
     root = _repository_root(repo)
     raw, bundle, config = _configured_roots(root)
@@ -240,6 +356,15 @@ def prepare_run(
     normalized_inputs = _validate_run_paths(root, inputs, "input")
     normalized_reads = _validate_run_paths(root, read_set, "read_set")
     normalized_writes = _validate_run_paths(root, write_set, "write_set")
+    normalized_review_reasons = _normalize_review_reasons(review_reasons)
+    if "multi-turn" in normalized_review_reasons and risk == "low":
+        raise ADWikiError("multi-turn review requires at least medium risk")
+    if "medium-risk" in normalized_review_reasons and risk != "medium":
+        raise ADWikiError("medium-risk review reason requires medium risk")
+    if "high-risk" in normalized_review_reasons and risk != "high":
+        raise ADWikiError("high-risk review reason requires high risk")
+    normalized_evidence_bindings = _normalize_evidence_bindings(root, evidence_bindings)
+    normalized_impact_summary = _normalize_impact_summary(normalized_writes, impact_summary)
     _validate_write_targets(root, bundle, raw, operation, normalized_writes)
     for relative in [*normalized_inputs, *normalized_reads]:
         path = _resolve_inside(root, relative, "planned read")
@@ -267,8 +392,19 @@ def prepare_run(
             "inputs": normalized_inputs,
             "read_set": normalized_reads,
             "write_set": normalized_writes,
+            "review_reasons": normalized_review_reasons,
+            "evidence_bindings": normalized_evidence_bindings,
+            "impact_summary": normalized_impact_summary,
         }
-        if all(existing.get(key) == value for key, value in identity.items()):
+        legacy_defaults = {
+            "evidence_bindings": [],
+            "impact_summary": [],
+            "review_reasons": [],
+        }
+        if all(
+            existing.get(key, legacy_defaults.get(key)) == value
+            for key, value in identity.items()
+        ):
             return {**existing, "result": "unchanged"}
         raise ADWikiError(f"run id already belongs to another plan: {run_id}")
     if path.parent.exists() and any(path.parent.iterdir()):
@@ -284,6 +420,7 @@ def prepare_run(
 
     reserved_baseline = [
         "ad-wiki.yaml",
+        ".ad-wiki/code-source-registry.json",
         ".ad-wiki/source-registry.json",
         _relative_posix(bundle / "index.md", root),
         _relative_posix(bundle / "log.md", root),
@@ -303,15 +440,19 @@ def prepare_run(
             {"at": now, "state": "PLANNED"},
         ],
         "inputs": normalized_inputs,
+        "evidence_bindings": normalized_evidence_bindings,
+        "impact_summary": normalized_impact_summary,
         "operation": operation,
         "plugin_version": PLUGIN_VERSION,
         "profile_version": str(config.get("profile_version", PROFILE_VERSION)),
         "read_set": normalized_reads,
+        "review_reasons": normalized_review_reasons,
         "reviews": [],
         "risk": risk,
         "run_id": run_id,
         "source_hashes": _registered_source_hashes(root, normalized_inputs, operation),
         "status": "PLANNED",
+        "transaction_schema_version": TRANSACTION_SCHEMA_VERSION,
         "updated_at": now,
         "validations": [
             _validation_evidence("preflight-bundle", preflight),
@@ -323,6 +464,108 @@ def prepare_run(
     (path.parent / "staged").mkdir(parents=True, exist_ok=True)
     _save_run(root, report)
     return {**report, "result": "created", "staging_root": _relative_posix(path.parent / "staged", root)}
+
+
+def _staged_hashes(staged: dict[str, Path]) -> dict[str, str]:
+    return {
+        relative: hashlib.sha256(path.read_bytes()).hexdigest()
+        for relative, path in sorted(staged.items())
+    }
+
+
+def _review_candidate_payload(
+    report: dict[str, Any], staged_hashes: dict[str, str]
+) -> dict[str, Any]:
+    return {
+        "baseline": report.get("baseline", {}),
+        "evidence_bindings": report.get("evidence_bindings", []),
+        "impact_summary": report.get("impact_summary", []),
+        "operation": report.get("operation"),
+        "review_reasons": report.get("review_reasons", []),
+        "risk": report.get("risk"),
+        "run_id": report.get("run_id"),
+        "source_hashes": report.get("source_hashes", {}),
+        "staged_hashes": staged_hashes,
+        "transaction_schema_version": report.get("transaction_schema_version"),
+        "write_set": report.get("write_set", []),
+    }
+
+
+def _review_candidate_digest(payload: dict[str, Any]) -> str:
+    return hashlib.sha256(_canonical_json_bytes(payload)).hexdigest()
+
+
+def _candidate_matches_payload(
+    candidate: Any,
+    payload: dict[str, Any],
+    digest: str,
+) -> bool:
+    if not isinstance(candidate, dict):
+        return False
+    expected_keys = {
+        *payload,
+        "candidate_digest",
+        "frozen_at",
+        "prevalidation",
+        "schema_version",
+    }
+    return (
+        set(candidate) == expected_keys
+        and candidate.get("schema_version") == "1"
+        and isinstance(candidate.get("frozen_at"), str)
+        and bool(candidate.get("frozen_at"))
+        and candidate.get("prevalidation")
+        == ["baseline", "exact-write-set", "raw-guard", "utf8"]
+        and candidate.get("candidate_digest") == digest
+        and all(candidate.get(key) == value for key, value in payload.items())
+    )
+
+
+def freeze_run(repo: str | os.PathLike[str], *, run_id: str) -> dict[str, Any]:
+    root = _repository_root(repo)
+    _configured_roots(root)
+    report = _load_run(root, run_id)
+    if not report.get("review_reasons"):
+        raise ADWikiError("run has no review reason and does not require freezing")
+    if report.get("operation") == "writeback" and not report.get("impact_summary"):
+        raise ADWikiError("review-gated Writeback requires a frozen impact summary")
+    if report.get("operation") == "writeback" and not report.get("evidence_bindings"):
+        raise ADWikiError("review-gated Writeback requires frozen evidence bindings")
+    if report.get("status") not in {"PLANNED", "REVIEW_REQUIRED"}:
+        raise ADWikiError(f"run cannot be frozen from state: {report.get('status')}")
+    staged = _staged_files(root, report)
+    _check_baseline(root, report.get("baseline", {}))
+    raw_report = guard_raw(root)
+    if not raw_report["ok"]:
+        raise ADWikiError("Raw guard failed before review freeze")
+    hashes = _staged_hashes(staged)
+    payload = _review_candidate_payload(report, hashes)
+    digest = _review_candidate_digest(payload)
+    existing = report.get("review_candidate")
+    if report.get("status") == "REVIEW_REQUIRED":
+        if not _candidate_matches_payload(existing, payload, digest):
+            raise ADWikiError("staged or evidence content changed after review freeze")
+        return {
+            **report,
+            "result": "unchanged",
+            "staged_files": sorted(staged),
+            "staging_root": _relative_posix(_stage_root(root, run_id), root),
+        }
+    report["review_candidate"] = {
+        **payload,
+        "candidate_digest": digest,
+        "frozen_at": _utc_now(),
+        "prevalidation": ["baseline", "exact-write-set", "raw-guard", "utf8"],
+        "schema_version": "1",
+    }
+    _advance(report, "REVIEW_REQUIRED", candidate_digest=digest)
+    _save_run(root, report)
+    return {
+        **report,
+        "result": "frozen",
+        "staged_files": sorted(staged),
+        "staging_root": _relative_posix(_stage_root(root, run_id), root),
+    }
 
 
 def _stage_root(root: Path, run_id: str) -> Path:
@@ -380,26 +623,6 @@ def approve_run(
         "message": "Pre-apply approval was removed; call apply_run.py directly.",
         "result": "approval_not_required",
     }
-
-
-@contextmanager
-def _repository_lock(root: Path, run_id: str) -> Iterator[None]:
-    lock_path = _resolve_inside(root, ".ad-wiki/lock", "lock path")
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        descriptor = os.open(lock_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError as exc:
-        raise ADWikiError("another AD-Wiki writer holds .ad-wiki/lock") from exc
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump({"acquired_at": _utc_now(), "pid": os.getpid(), "run_id": run_id}, handle)
-            handle.write("\n")
-        yield
-    finally:
-        try:
-            lock_path.unlink()
-        except FileNotFoundError:
-            pass
 
 
 def _atomic_write_bytes(path: Path, content: bytes) -> None:
@@ -491,7 +714,31 @@ def _mark_failed(root: Path, report: dict[str, Any], message: str, validation: d
     _save_run(root, report)
 
 
-def apply_run(repo: str | os.PathLike[str], *, run_id: str) -> dict[str, Any]:
+def _discard_rolled_back_validation(report: dict[str, Any]) -> None:
+    events = report.get("events")
+    if not isinstance(events, list):
+        return
+    report["events"] = [
+        event
+        for event in events
+        if not (isinstance(event, dict) and event.get("state") == "VALIDATED")
+    ]
+
+
+def _completed_baseline(report: dict[str, Any]) -> dict[str, str | None]:
+    return {
+        path: digest
+        for path, digest in report.get("baseline_after", {}).items()
+        if path != ".ad-wiki/code-source-registry.json"
+    }
+
+
+def apply_run(
+    repo: str | os.PathLike[str],
+    *,
+    run_id: str,
+    candidate_digest: str | None = None,
+) -> dict[str, Any]:
     root = _repository_root(repo)
     _, bundle, config = _configured_roots(root)
     _require_supported_profile(config)
@@ -501,10 +748,19 @@ def apply_run(repo: str | os.PathLike[str], *, run_id: str) -> dict[str, Any]:
         if not isinstance(code_wiki, dict) or not code_wiki.get("finalized"):
             raise ADWikiError("Code Wiki run is not finalized")
     if report.get("status") in {"VALIDATED", "REVIEWED"}:
-        _check_baseline(root, report.get("baseline_after", {}))
-        raw_report = guard_raw(root)
-        if not raw_report["ok"]:
-            raise ADWikiError("Raw guard failed for the completed run")
+        with repository_lock(root, f"repair-{run_id}"):
+            report = _load_run(root, run_id)
+            _check_baseline(root, _completed_baseline(report))
+            raw_report = guard_raw(root)
+            if not raw_report["ok"]:
+                raise ADWikiError("Raw guard failed for the completed run")
+            if report.get("operation") == "code-wiki":
+                register_validated_code_source(root, report)
+                registry_relative = ".ad-wiki/code-source-registry.json"
+                if registry_relative not in report.get("applied_set", []):
+                    report.setdefault("applied_set", []).append(registry_relative)
+                    report["applied_set"].sort()
+                _save_run(root, report)
         return {**report, "result": "unchanged"}
     if report.get("status") not in {
         "PLANNED",
@@ -513,9 +769,32 @@ def apply_run(repo: str | os.PathLike[str], *, run_id: str) -> dict[str, Any]:
         "AUTO_APPROVED",
     }:
         raise ADWikiError(f"run cannot be applied from state: {report.get('status')}")
+    current_lineage = report.get("transaction_schema_version") == TRANSACTION_SCHEMA_VERSION
+    current_review_gate = bool(
+        report.get("review_reasons")
+        or report.get("review_candidate")
+        or (
+            current_lineage
+            and report.get("status")
+            in {"APPROVED", "AUTO_APPROVED", "REVIEW_REQUIRED"}
+        )
+    )
+    if report.get("status") == "PLANNED" and current_review_gate:
+        raise ADWikiError("review-gated run must be frozen before Apply")
+    if report.get("status") == "PLANNED" and candidate_digest is not None:
+        raise ADWikiError("ungated run does not accept a candidate digest")
+    review_candidate = report.get("review_candidate")
+    if current_review_gate and report.get("status") != "PLANNED":
+        if not isinstance(review_candidate, dict):
+            raise ADWikiError("review-gated run is missing its frozen candidate")
+        expected_digest = review_candidate.get("candidate_digest")
+        if candidate_digest is None:
+            raise ADWikiError("review-gated run requires the frozen candidate digest")
+        if candidate_digest != expected_digest:
+            raise ADWikiError("candidate digest does not match the reviewed run")
     staged = _staged_files(root, report)
 
-    with _repository_lock(root, run_id):
+    with repository_lock(root, run_id):
         staged_bytes = {
             relative: path.read_bytes() for relative, path in sorted(staged.items())
         }
@@ -523,6 +802,22 @@ def apply_run(repo: str | os.PathLike[str], *, run_id: str) -> dict[str, Any]:
             relative: hashlib.sha256(content).hexdigest()
             for relative, content in staged_bytes.items()
         }
+        if current_review_gate:
+            current_payload = _review_candidate_payload(report, staged_hashes)
+            current_digest = _review_candidate_digest(current_payload)
+            if (
+                current_digest != candidate_digest
+                or not _candidate_matches_payload(
+                    report.get("review_candidate"), current_payload, current_digest
+                )
+            ):
+                _mark_failed(
+                    root,
+                    report,
+                    "staged or evidence content changed after review freeze",
+                    None,
+                )
+                raise ADWikiError("staged or evidence content changed after review freeze")
         if report.get("operation") == "code-wiki":
             expected_hashes = report["code_wiki"].get("finalized_staged_hashes")
             if staged_hashes != expected_hashes:
@@ -538,6 +833,14 @@ def apply_run(repo: str | os.PathLike[str], *, run_id: str) -> dict[str, Any]:
                 raise ADWikiError("Raw guard failed before apply")
             _check_baseline(root, report.get("baseline", {}))
             rollback_paths = _rollback_paths(root, bundle, list(report["write_set"]))
+            if report.get("operation") == "code-wiki":
+                rollback_paths.add(
+                    _resolve_inside(
+                        root,
+                        ".ad-wiki/code-source-registry.json",
+                        "code source registry",
+                    )
+                )
             snapshot = _snapshot(rollback_paths, root)
 
             for relative, content in staged_bytes.items():
@@ -579,16 +882,26 @@ def apply_run(repo: str | os.PathLike[str], *, run_id: str) -> dict[str, Any]:
                     _validation_evidence("post-apply-raw", raw_after),
                 ]
             )
-            report["baseline_after"] = _baseline(
-                root,
-                [*report.get("baseline", {}), *applied_set],
-            )
+            completion_paths = {
+                *report.get("baseline", {}),
+                *report["applied_set"],
+            } - {".ad-wiki/code-source-registry.json"}
+            report["baseline_after"] = _baseline(root, completion_paths)
             _advance(report, "VALIDATED")
             _save_run(root, report)
+            if report.get("operation") == "code-wiki":
+                register_validated_code_source(root, report)
+                registry_relative = ".ad-wiki/code-source-registry.json"
+                if registry_relative not in report["applied_set"]:
+                    report["applied_set"].append(registry_relative)
+                    report["applied_set"].sort()
+                _save_run(root, report)
             return {**report, "result": "applied"}
         except Exception as exc:
             if snapshot is not None:
                 _restore(snapshot)
+            if report.get("status") == "VALIDATED":
+                _discard_rolled_back_validation(report)
             _mark_failed(root, report, str(exc), validation)
             if isinstance(exc, ADWikiError):
                 raise
@@ -605,26 +918,39 @@ def review_run(
 ) -> dict[str, Any]:
     root = _repository_root(repo)
     _configured_roots(root)
-    report = _load_run(root, run_id)
-    if report.get("status") == "REVIEWED" and decision == "approved":
-        _check_baseline(root, report.get("baseline_after", {}))
-        return {**report, "result": "unchanged"}
-    if report.get("status") != "VALIDATED":
-        raise ADWikiError(f"run cannot be reviewed from state: {report.get('status')}")
-    if decision not in {"approved", "rejected"}:
-        raise ADWikiError("review decision must be approved or rejected")
-    _check_baseline(root, report.get("baseline_after", {}))
-    raw_report = guard_raw(root)
-    if not raw_report["ok"]:
-        raise ADWikiError("Raw guard failed before review")
-    _validate_human_actor(actor)
-    review = {"at": _utc_now(), "by": actor, "decision": decision}
-    if note:
-        review["note"] = note
-    report.setdefault("reviews", []).append(review)
-    _advance(report, "REVIEWED" if decision == "approved" else "FAILED", by=actor, decision=decision)
-    _save_run(root, report)
-    return {**report, "result": decision}
+    with repository_lock(root, f"review-{run_id}"):
+        report = _load_run(root, run_id)
+        if report.get("status") == "REVIEWED" and decision == "approved":
+            _check_baseline(root, _completed_baseline(report))
+            return {**report, "result": "unchanged"}
+        if report.get("status") != "VALIDATED":
+            raise ADWikiError(f"run cannot be reviewed from state: {report.get('status')}")
+        if decision not in {"approved", "rejected"}:
+            raise ADWikiError("review decision must be approved or rejected")
+        _check_baseline(root, _completed_baseline(report))
+        raw_report = guard_raw(root)
+        if not raw_report["ok"]:
+            raise ADWikiError("Raw guard failed before review")
+        if report.get("operation") == "code-wiki":
+            register_validated_code_source(root, report)
+            registry_relative = ".ad-wiki/code-source-registry.json"
+            if registry_relative not in report.get("applied_set", []):
+                report.setdefault("applied_set", []).append(registry_relative)
+                report["applied_set"].sort()
+            _save_run(root, report)
+        _validate_human_actor(actor)
+        review = {"at": _utc_now(), "by": actor, "decision": decision}
+        if note:
+            review["note"] = note
+        report.setdefault("reviews", []).append(review)
+        _advance(
+            report,
+            "REVIEWED" if decision == "approved" else "FAILED",
+            by=actor,
+            decision=decision,
+        )
+        _save_run(root, report)
+        return {**report, "result": decision}
 
 
 def _search_tokens(value: str, *, query: bool = False) -> list[str]:

@@ -81,6 +81,16 @@ Default to one supervised source. A Source Summary alone is incomplete when the 
 
 Write back durable comparisons, analyses, decisions, reusable explanations, and knowledge gaps. Skip temporary status, formatting-only output, and duplicate summaries. Re-navigate the current Wiki to establish the impact set, then use the shared staged-write protocol as an independent maintenance operation.
 
+Query-derived multi-turn or medium/high-risk handoffs add a content-review gate:
+
+1. Prepare with `--review-reason` values, bounded `--impact-json` entries for affected pages/claims, and `--evidence-json` for every document/code revision that will be shown; then stage the complete candidate. A gated Writeback without frozen evidence is invalid.
+2. Inspect the semantic diff, then run `freeze_run.py`.
+3. Render the required review packet from the frozen impact and evidence entries, return it, and stop before Apply.
+4. A later, separate user `apply` must identify the unambiguous run and reuse its exact candidate digest.
+5. Any write-set, staged-byte, evidence-revision, or baseline drift invalidates the candidate; create a new run and review packet.
+
+This gate binds reviewed content and does not authenticate an actor. Single-turn low-risk Writeback and non-Query workflows retain the shared direct path unless their own contract says otherwise.
+
 ## Lint
 
 ```bash

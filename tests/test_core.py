@@ -21,6 +21,7 @@ from ad_wiki.core import (  # noqa: E402
     validate_repository,
     write_run_report,
 )
+from ad_wiki.code_sources import repository_key  # noqa: E402
 
 
 class RepositoryTestCase(unittest.TestCase):
@@ -45,6 +46,10 @@ class InitializeRepositoryTests(RepositoryTestCase):
         self.assertTrue((self.repo / "wiki/sources").is_dir())
         self.assertTrue((self.repo / "wiki/concepts").is_dir())
         self.assertTrue((self.repo / ".ad-wiki/runs").is_dir())
+        self.assertEqual(
+            json.loads((self.repo / ".ad-wiki/code-source-registry.json").read_text()),
+            {"sources": [], "version": 1},
+        )
 
         agent_entry = (self.repo / "AGENTS.md").read_text()
         self.assertIn("This repository is an AD Wiki", agent_entry)
@@ -56,6 +61,9 @@ class InitializeRepositoryTests(RepositoryTestCase):
         self.assertIn("never scan the Raw directory", agent_entry)
         self.assertIn("the Wiki is path compression", agent_entry)
         self.assertIn("Never ask the user to choose Wiki, Raw, code, or MCP evidence mode", agent_entry)
+        self.assertIn("at most one ephemeral writeback candidate", agent_entry)
+        self.assertIn("staged review only", agent_entry)
+        self.assertIn("later confirms `apply`", agent_entry)
         self.assertEqual((self.repo / "CLAUDE.md").read_text(), "# AD Wiki\n\n@AGENTS.md\n")
 
         config = json.loads((self.repo / "ad-wiki.yaml").read_text())
@@ -117,6 +125,33 @@ class InitializeRepositoryTests(RepositoryTestCase):
         config_path.write_text("user-owned\n")
         with self.assertRaisesRegex(ADWikiError, "refusing to overwrite"):
             self.init_repo()
+
+    def test_init_preserves_existing_code_source_registry(self) -> None:
+        self.init_repo()
+        registry_path = self.repo / ".ad-wiki/code-source-registry.json"
+        identity = {
+            "remote": "https://example.test/framework",
+            "repository": "framework",
+            "root_commits": ["0" * 40],
+        }
+        populated = {
+            "sources": [
+                {
+                    "canonical_remote": identity["remote"],
+                    "repository": identity["repository"],
+                    "repository_key": repository_key(identity),
+                    "root_commits": identity["root_commits"],
+                    "snapshots": [],
+                }
+            ],
+            "version": 1,
+        }
+        registry_path.write_text(json.dumps(populated))
+
+        result = self.init_repo()
+
+        self.assertEqual(result["status"], "unchanged")
+        self.assertEqual(json.loads(registry_path.read_text()), populated)
 
     def test_refuses_to_overwrite_existing_agent_instructions(self) -> None:
         (self.repo / "AGENTS.md").write_text("user-owned instructions\n")
@@ -619,6 +654,23 @@ class RunReportTests(RepositoryTestCase):
                 write_set=[],
                 validations=[],
             )
+
+    def test_legacy_reporter_cannot_emit_approval_or_review_gate_states(self) -> None:
+        for state in ("APPROVED", "AUTO_APPROVED", "REVIEW_REQUIRED"):
+            with self.subTest(state=state), self.assertRaisesRegex(
+                ADWikiError, "cannot emit approval or review-gate"
+            ):
+                write_run_report(
+                    self.repo,
+                    run_id=f"legacy-{state.lower()}",
+                    operation="writeback",
+                    state=state,
+                    risk="medium",
+                    inputs=[],
+                    read_set=[],
+                    write_set=["wiki/concepts/example.md"],
+                    validations=[],
+                )
 
         with self.assertRaisesRegex(ADWikiError, "outside repository"):
             write_run_report(

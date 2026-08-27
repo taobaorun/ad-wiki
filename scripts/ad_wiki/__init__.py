@@ -12,6 +12,7 @@ from .core import (
 from .runtime import (
     apply_run,
     approve_run,
+    freeze_run,
     migrate_repository,
     prepare_run,
     query_registered_raw,
@@ -26,6 +27,12 @@ from .code_wiki import (
     inspect_code_repository,
     prepare_code_wiki,
     publish_code_wiki_bindings,
+)
+from .code_sources import (
+    bind_code_worktree,
+    load_code_source_registry,
+    rebuild_code_source_registry,
+    resolve_code_worktree,
 )
 
 __all__ = [
@@ -44,6 +51,7 @@ __all__ = [
     "query_registered_raw",
     "approve_run",
     "apply_run",
+    "freeze_run",
     "review_run",
     "migrate_repository",
     "inspect_code_repository",
@@ -51,4 +59,8 @@ __all__ = [
     "finalize_code_wiki",
     "prepare_code_wiki",
     "publish_code_wiki_bindings",
+    "bind_code_worktree",
+    "load_code_source_registry",
+    "rebuild_code_source_registry",
+    "resolve_code_worktree",
 ]

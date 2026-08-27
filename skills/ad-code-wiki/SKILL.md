@@ -15,6 +15,7 @@ Read [Code Wiki Contract](references/code-wiki-contract.md) before starting. Use
 2. Normalize `<plugin-root>` as this Skill directory's `parent.parent`.
 3. Require the current host manifest plus:
    - `<plugin-root>/scripts/prepare_code_wiki.py`
+   - `<plugin-root>/scripts/bind_code_worktree.py`
    - `<plugin-root>/scripts/checkpoint_code_wiki.py`
    - `<plugin-root>/scripts/finalize_code_wiki.py`
    - `<plugin-root>/scripts/apply_run.py`
@@ -37,6 +38,8 @@ python3 <plugin-root>/scripts/prepare_code_wiki.py \
   --repo <wiki-repo> --code-repo <code-repo> \
   --run-id <run-id> [--structural-index] --json
 ```
+
+`prepare_code_wiki.py` validates the explicit clean worktree and records its host-local binding in the Wiki's private cache. This binding is never published or committed and lets later Query/Maintainer work resolve the same canonical Git identity without scanning sibling directories.
 
 On resume, use the same explicit roots and run ID. Read `run.json.code_wiki`; process only `pending` Concepts unless the user explicitly requests a retry of a terminal result.
 

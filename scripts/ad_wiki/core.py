@@ -111,7 +111,9 @@ For factual, conceptual, explanatory, comparative, troubleshooting, or procedura
 6. If compiled evidence is missing or insufficient, say that the Wiki does not currently answer the question. Do not substitute model memory for missing Wiki evidence.
 7. For one narrow missing detail linked by a Concept already read, prefer the installed AD Wiki Query runtime's governed Raw fallback. If it is unavailable or insufficient, resolve only that Concept's exact registered source and inspect one relevant document or section; never scan the Raw directory or unrelated sources.
 8. Raw, source code, and commits are primary evidence; the Wiki is path compression. If local evidence is absent, insufficient, or freshness-sensitive, automatically use an exact Concept-declared upstream source when accessible and label it as outside the compiled snapshot. Never ask the user to choose Wiki, Raw, code, or MCP evidence mode.
-9. Keep queries read-only. Modify the repository only when the user explicitly requests knowledge maintenance.
+9. When a Concept or Code Wiki Source Summary declares an exact Git remote/revision, use the installed exact worktree resolver when source detail is needed. Never scan sibling/workspace repositories, choose by similar directory name, use cross-project memory as authority, or clone automatically; ask for the exact worktree when the binding is missing or ambiguous.
+10. Keep queries read-only. In a multi-turn topic, keep at most one ephemeral writeback candidate, replace it when later evidence changes the conclusion, and surface it once only after reusable synthesis converges without a material evidence gap. Never persist candidate or Query history.
+11. Natural-language `准备写回`, `writeback`, or equivalent intent may hand the candidate to the installed Maintainer. For multi-turn or medium/high-risk Query handoffs, the first intent authorizes staged review only; modify live Wiki only after the user reviews the frozen candidate and later confirms `apply`.
 """,
     "CLAUDE.md": "# AD Wiki\n\n@AGENTS.md\n",
 }
@@ -275,6 +277,9 @@ def initialize_repository(
         sort_keys=True,
     ) + "\n"
     registry_text = json.dumps({"sources": [], "version": 1}, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    code_registry_text = json.dumps(
+        {"sources": [], "version": 1}, ensure_ascii=False, indent=2, sort_keys=True
+    ) + "\n"
     labels = LANGUAGE_TEXT[content_language]
     domain_text = (
         f"# {labels['domain_title']}\n\n"
@@ -286,6 +291,7 @@ def initialize_repository(
         "ad-wiki.yaml": config_text,
         ".ad-wiki/.gitignore": "lock\n",
         ".ad-wiki/domain.md": domain_text,
+        ".ad-wiki/code-source-registry.json": code_registry_text,
         ".ad-wiki/source-registry.json": registry_text,
         "wiki/index.md": _root_index(content_language),
         "wiki/log.md": f"# {labels['log_title']}\n",
@@ -319,6 +325,16 @@ def initialize_repository(
                 if review_compatible and search_compatible and legacy_config == default_config:
                     compatible_existing.add(relative)
                     continue
+        if relative == ".ad-wiki/code-source-registry.json":
+            try:
+                from .code_sources import load_code_source_registry
+
+                load_code_source_registry(root)
+            except ADWikiError:
+                pass
+            else:
+                compatible_existing.add(relative)
+                continue
         raise ADWikiError(f"refusing to overwrite non-identical file: {relative}")
 
     directories = [
@@ -912,6 +928,21 @@ def validate_repository(repo: str | os.PathLike[str], today: date | None = None)
             )
         )
 
+    code_registry_path = root / ".ad-wiki/code-source-registry.json"
+    if code_registry_path.exists() or code_registry_path.is_symlink():
+        try:
+            from .code_sources import load_code_source_registry
+
+            load_code_source_registry(root)
+        except ADWikiError as exc:
+            errors.append(
+                _issue(
+                    "ADW-E310",
+                    str(exc),
+                    ".ad-wiki/code-source-registry.json",
+                )
+            )
+
     for relative in STATIC_AGENT_FILES:
         path = root / relative
         if path.is_symlink() or not path.is_file():
@@ -1189,6 +1220,10 @@ def write_run_report(
         raise ADWikiError(f"unsupported risk: {risk}")
     if risk == "prohibited":
         raise ADWikiError("prohibited operations cannot be recorded as runnable")
+    if state in {"APPROVED", "AUTO_APPROVED", "REVIEW_REQUIRED"}:
+        raise ADWikiError(
+            "legacy run reporter cannot emit approval or review-gate states"
+        )
 
     runs_root = root / ".ad-wiki/runs"
     if runs_root.is_symlink() or not _path_is_within(runs_root.resolve(), root):
@@ -1200,6 +1235,20 @@ def write_run_report(
     previous: dict[str, Any] | None = None
     if path.is_file():
         previous = json.loads(path.read_text(encoding="utf-8"))
+        if any(
+            key in previous
+            for key in (
+                "applied_set",
+                "baseline",
+                "events",
+                "review_candidate",
+                "review_reasons",
+                "source_hashes",
+            )
+        ):
+            raise ADWikiError(
+                "transaction-owned run must be advanced by transaction commands"
+            )
         if previous.get("operation") != operation:
             raise ADWikiError("run operation cannot change")
         if previous.get("risk") != risk:

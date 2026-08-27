@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from ..core import ADWikiError
+from ..code_sources import repository_key
 from .extractors import extract_file, provider_for
 from .graph import build_graph
 from .model import SCHEMA_VERSION, canonical_json_bytes, validate_fragment, validate_graph
@@ -20,16 +21,6 @@ from .security import DENIED_PARTS, read_text_source
 SUMMARY_VERSION = "1"
 MAX_FILES = 100_000
 MAX_GRAPH_BYTES = 512 * 1024 * 1024
-
-
-def repository_key(code_source: dict[str, Any]) -> str:
-    remote = code_source.get("remote")
-    if remote:
-        identity = f"remote:{remote}"
-    else:
-        roots = ",".join(sorted(code_source.get("root_commits", [])))
-        identity = f"local:{code_source.get('repository', 'code')}:{roots}"
-    return hashlib.sha256(identity.encode()).hexdigest()[:16]
 
 
 def cache_root_for(wiki_root: str | Path, code_source: dict[str, Any]) -> Path:
